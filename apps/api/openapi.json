@@ -1,0 +1,1627 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CMR Workstation API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fs/list": {
+      "get": {
+        "summary": "Fs List",
+        "operationId": "fs_list_fs_list_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryListing"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/studies/import": {
+      "post": {
+        "summary": "Import Study Endpoint",
+        "operationId": "import_study_endpoint_studies_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportStudyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/studies/{study_id}": {
+      "get": {
+        "summary": "Get Study",
+        "operationId": "get_study_studies__study_id__get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/series/{series_id}/role": {
+      "post": {
+        "summary": "Update Role",
+        "operationId": "update_role_series__series_id__role_post",
+        "parameters": [
+          {
+            "name": "series_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Series Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Role Series  Series Id  Role Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/infer": {
+      "post": {
+        "summary": "Infer",
+        "operationId": "infer_jobs_infer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InferJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "summary": "Job",
+        "operationId": "job_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contours/{series_id}": {
+      "get": {
+        "summary": "Get Contours",
+        "operationId": "get_contours_contours__series_id__get",
+        "parameters": [
+          {
+            "name": "series_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Series Id"
+            }
+          },
+          {
+            "name": "module",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(function|lge)$",
+              "title": "Module"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ContourSet-Output"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Contours Contours  Series Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Contours",
+        "operationId": "put_contours_contours__series_id__put",
+        "parameters": [
+          {
+            "name": "series_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Series Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContourSet-Input"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContourSet-Output"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/measurements/function": {
+      "post": {
+        "summary": "Recompute Function Endpoint",
+        "operationId": "recompute_function_endpoint_measurements_function_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasurementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Recompute Function Endpoint Measurements Function Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/measurements/lge": {
+      "post": {
+        "summary": "Recompute Lge Endpoint",
+        "operationId": "recompute_lge_endpoint_measurements_lge_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasurementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Recompute Lge Endpoint Measurements Lge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports/{study_id}": {
+      "get": {
+        "summary": "Report",
+        "operationId": "report_reports__study_id__get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportDraft"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Report",
+        "operationId": "update_report_reports__study_id__put",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportDraft"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/exports/{study_id}.csv": {
+      "get": {
+        "summary": "Export Csv",
+        "operationId": "export_csv_exports__study_id__csv_get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/exports/{study_id}.pdf": {
+      "get": {
+        "summary": "Export Pdf Endpoint",
+        "operationId": "export_pdf_endpoint_exports__study_id__pdf_get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/series/{series_id}/image": {
+      "get": {
+        "summary": "Image",
+        "operationId": "image_series__series_id__image_get",
+        "parameters": [
+          {
+            "name": "series_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Series Id"
+            }
+          },
+          {
+            "name": "slice_index",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Slice Index"
+            }
+          },
+          {
+            "name": "phase_index",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Phase Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/series/{series_id}": {
+      "get": {
+        "summary": "Series Detail",
+        "operationId": "series_detail_series__series_id__get",
+        "parameters": [
+          {
+            "name": "series_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Series Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Series Detail Series  Series Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ContourSet-Input": {
+        "properties": {
+          "series_id": {
+            "type": "integer",
+            "title": "Series Id"
+          },
+          "module": {
+            "type": "string",
+            "enum": [
+              "function",
+              "lge"
+            ],
+            "title": "Module"
+          },
+          "coordinate_space": {
+            "type": "string",
+            "const": "pixel",
+            "title": "Coordinate Space",
+            "default": "pixel"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "manual"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Settings"
+          },
+          "phase_labels": {
+            "$ref": "#/components/schemas/PhaseLabels"
+          },
+          "frames": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FrameContour-Input"
+            },
+            "type": "object",
+            "title": "Frames"
+          }
+        },
+        "type": "object",
+        "required": [
+          "series_id",
+          "module"
+        ],
+        "title": "ContourSet"
+      },
+      "ContourSet-Output": {
+        "properties": {
+          "series_id": {
+            "type": "integer",
+            "title": "Series Id"
+          },
+          "module": {
+            "type": "string",
+            "enum": [
+              "function",
+              "lge"
+            ],
+            "title": "Module"
+          },
+          "coordinate_space": {
+            "type": "string",
+            "const": "pixel",
+            "title": "Coordinate Space",
+            "default": "pixel"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "manual"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Settings"
+          },
+          "phase_labels": {
+            "$ref": "#/components/schemas/PhaseLabels"
+          },
+          "frames": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FrameContour-Output"
+            },
+            "type": "object",
+            "title": "Frames"
+          }
+        },
+        "type": "object",
+        "required": [
+          "series_id",
+          "module"
+        ],
+        "title": "ContourSet"
+      },
+      "DirectoryEntry": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "has_dicom": {
+            "type": "boolean",
+            "title": "Has Dicom",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path"
+        ],
+        "title": "DirectoryEntry"
+      },
+      "DirectoryListing": {
+        "properties": {
+          "current_path": {
+            "type": "string",
+            "title": "Current Path"
+          },
+          "parent_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Path"
+          },
+          "directories": {
+            "items": {
+              "$ref": "#/components/schemas/DirectoryEntry"
+            },
+            "type": "array",
+            "title": "Directories"
+          },
+          "default_sample_path": {
+            "type": "string",
+            "title": "Default Sample Path",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_path"
+        ],
+        "title": "DirectoryListing"
+      },
+      "FrameContour-Input": {
+        "properties": {
+          "include": {
+            "type": "boolean",
+            "title": "Include",
+            "default": true
+          },
+          "endo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epi": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rv": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enhanced": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exclude": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mvo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "FrameContour"
+      },
+      "FrameContour-Output": {
+        "properties": {
+          "include": {
+            "type": "boolean",
+            "title": "Include",
+            "default": true
+          },
+          "endo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epi": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rv": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enhanced": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exclude": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mvo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolygonContour"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "FrameContour"
+      },
+      "FrameRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "slice_index": {
+            "type": "integer",
+            "title": "Slice Index"
+          },
+          "phase_index": {
+            "type": "integer",
+            "title": "Phase Index"
+          },
+          "instance_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Number"
+          },
+          "trigger_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Time"
+          },
+          "file_path": {
+            "type": "string",
+            "title": "File Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slice_index",
+          "phase_index",
+          "file_path"
+        ],
+        "title": "FrameRef"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ImportStudyRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "ImportStudyRequest"
+      },
+      "InferJobRequest": {
+        "properties": {
+          "series_id": {
+            "type": "integer",
+            "title": "Series Id"
+          },
+          "module": {
+            "type": "string",
+            "enum": [
+              "function",
+              "lge"
+            ],
+            "title": "Module"
+          },
+          "adapter": {
+            "type": "string",
+            "title": "Adapter",
+            "default": "model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "series_id",
+          "module"
+        ],
+        "title": "InferJobRequest"
+      },
+      "JobStatus": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "module": {
+            "type": "string",
+            "enum": [
+              "function",
+              "lge"
+            ],
+            "title": "Module"
+          },
+          "adapter": {
+            "type": "string",
+            "title": "Adapter"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "module",
+          "adapter"
+        ],
+        "title": "JobStatus"
+      },
+      "MeasurementRequest": {
+        "properties": {
+          "series_id": {
+            "type": "integer",
+            "title": "Series Id"
+          },
+          "threshold_method": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "nsd",
+                  "fwhm"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Method"
+          },
+          "sd_multiplier": {
+            "type": "number",
+            "title": "Sd Multiplier",
+            "default": 5.0
+          },
+          "grey_zone": {
+            "type": "boolean",
+            "title": "Grey Zone",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "series_id"
+        ],
+        "title": "MeasurementRequest"
+      },
+      "PhaseLabels": {
+        "properties": {
+          "ed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ed"
+          },
+          "es": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Es"
+          }
+        },
+        "type": "object",
+        "title": "PhaseLabels"
+      },
+      "Point2D": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "patient": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "Point2D"
+      },
+      "PolygonContour": {
+        "properties": {
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/Point2D"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "PolygonContour"
+      },
+      "ReportDraft": {
+        "properties": {
+          "study_id": {
+            "type": "integer",
+            "title": "Study Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "草稿",
+              "定稿"
+            ],
+            "title": "Status",
+            "default": "草稿"
+          },
+          "findings": {
+            "type": "string",
+            "title": "Findings",
+            "default": ""
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id"
+        ],
+        "title": "ReportDraft"
+      },
+      "ReportUpdateRequest": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "草稿",
+              "定稿"
+            ],
+            "title": "Status",
+            "default": "草稿"
+          },
+          "findings": {
+            "type": "string",
+            "title": "Findings",
+            "default": ""
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "title": "ReportUpdateRequest"
+      },
+      "RoleUpdateRequest": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "cine_sax",
+              "cine_lax_4ch",
+              "lge_sax",
+              "lge_lax",
+              "unknown"
+            ],
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "RoleUpdateRequest"
+      },
+      "SeriesSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "study_id": {
+            "type": "integer",
+            "title": "Study Id"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cine_sax",
+              "cine_lax_4ch",
+              "lge_sax",
+              "lge_lax",
+              "unknown"
+            ],
+            "title": "Role"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols"
+          },
+          "file_count": {
+            "type": "integer",
+            "title": "File Count"
+          },
+          "slice_count": {
+            "type": "integer",
+            "title": "Slice Count"
+          },
+          "phase_count": {
+            "type": "integer",
+            "title": "Phase Count"
+          },
+          "pixel_spacing": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Pixel Spacing"
+          },
+          "slice_thickness": {
+            "type": "number",
+            "title": "Slice Thickness"
+          },
+          "orientation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orientation"
+          },
+          "folder_path": {
+            "type": "string",
+            "title": "Folder Path"
+          },
+          "has_predictions": {
+            "type": "boolean",
+            "title": "Has Predictions",
+            "default": false
+          },
+          "default_slice": {
+            "type": "integer",
+            "title": "Default Slice",
+            "default": 0
+          },
+          "default_phase": {
+            "type": "integer",
+            "title": "Default Phase",
+            "default": 0
+          },
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/FrameRef"
+            },
+            "type": "array",
+            "title": "Frames"
+          },
+          "latest_measurement": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Measurement"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "study_id",
+          "description",
+          "role",
+          "rows",
+          "cols",
+          "file_count",
+          "slice_count",
+          "phase_count",
+          "pixel_spacing",
+          "slice_thickness",
+          "folder_path"
+        ],
+        "title": "SeriesSummary"
+      },
+      "StudyDetail": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "study_uid": {
+            "type": "string",
+            "title": "Study Uid"
+          },
+          "patient_name": {
+            "type": "string",
+            "title": "Patient Name"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "study_date": {
+            "type": "string",
+            "title": "Study Date"
+          },
+          "accession_number": {
+            "type": "string",
+            "title": "Accession Number"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "default_sample_path": {
+            "type": "string",
+            "title": "Default Sample Path"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/SeriesSummary"
+            },
+            "type": "array",
+            "title": "Series"
+          },
+          "report": {
+            "$ref": "#/components/schemas/ReportDraft"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "study_uid",
+          "patient_name",
+          "patient_id",
+          "study_date",
+          "accession_number",
+          "source_path",
+          "default_sample_path",
+          "series",
+          "report"
+        ],
+        "title": "StudyDetail"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

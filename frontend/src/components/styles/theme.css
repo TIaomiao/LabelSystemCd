@@ -1,0 +1,403 @@
+/* Root Colors - Light Mode (Default) */
+:root,
+[data-theme="light"] {
+  /* Grays */
+  --white: #ffffff;
+  --black: #000000;
+  --gray-900: #1a1a1a;
+  --gray-800: #2d2d2d;
+  --gray-700: #3a3a3a;
+  --gray-600: #4a4a4a;
+  --gray-500: #6b6b6b;
+  --gray-400: #8b8b8b;
+  --gray-300: #b0b0b0;
+  --gray-200: #e8e8e8;
+  --gray-100: #f5f5f5;
+
+  /* Accent Colors */
+  --amber-400: #d97706;
+  --red-500: #ef4444;
+  --green-500: #22c55e;
+
+  /* Light Mode - Background */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f8f8;
+  --bg-tertiary: #f0f0f0;
+
+  /* Light Mode - Text */
+  --text-primary: #2d2d2d;
+  --text-secondary: #4a4a4a;
+  --text-tertiary: #8b8b8b;
+  --text-muted: #8b8b8b;
+  --text-inverse: #ffffff;
+
+  /* Light Mode - Accent */
+  --accent-gold: #d97706;
+
+  /* Light Mode - Status Colors */
+  --success-color: #22c55e;
+  --error-color: #ef4444;
+  --warning-color: #f59e0b;
+  --info-color: #3b82f6;
+
+  /* Light Mode - Border */
+  --border-color: #e0e0e0;
+  --scrollbar-color: rgba(0, 0, 0, 0.2);
+  --scrollbar-hover-color: rgba(0, 0, 0, 0.3);
+
+  /* Light Mode - Input */
+  --input-bg: #f0f0f0;
+  --input-border: #d5d5d5;
+
+  /* Light Mode - Button */
+  --button-text: #d97706;
+  --button-hover-text: #b85f00;
+
+  /* Other */
+  --border-radius: 8px;
+  --card-shadow: rgba(0, 0, 0, 0.05);
+}
+
+/* Dark Mode */
+[data-theme="dark"] {
+  /* Dark Mode - Background */
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #2d2d2d;
+  --bg-tertiary: #3a3a3a;
+
+  /* Dark Mode - Text */
+  --text-primary: #e8e8e8;
+  --text-secondary: #b0b0b0;
+  --text-tertiary: #8b8b8b;
+  --text-muted: #8b8b8b;
+  --text-inverse: #1a1a1a;
+
+  /* Dark Mode - Accent */
+  --accent-gold: #d97706;
+
+  /* Dark Mode - Status Colors */
+  --success-color: #22c55e;
+  --error-color: #ef4444;
+  --warning-color: #f59e0b;
+  --info-color: #3b82f6;
+
+  /* Dark Mode - Border */
+  --border-color: #4a4a4a;
+  --scrollbar-color: rgba(255, 255, 255, 0.2);
+  --scrollbar-hover-color: rgba(255, 255, 255, 0.3);
+
+  /* Dark Mode - Input */
+  --input-bg: #2d2d2d;
+  --input-border: #4a4a4a;
+
+  /* Dark Mode - Button */
+  --button-text: #d97706;
+  --button-hover-text: #f5a022;
+
+  /* Other */
+  --border-radius: 8px;
+  --card-shadow: rgba(0, 0, 0, 0.4);
+}
+
+/* Global Styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Typography */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+h4 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+p {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+
+/* Links */
+a {
+  color: var(--accent-gold);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--button-hover-text);
+}
+
+/* Forms */
+input,
+textarea,
+select {
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--input-border);
+  border-radius: var(--border-radius);
+  padding: 0.75rem;
+  font-family: inherit;
+  font-size: 1rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1);
+}
+
+/* Buttons */
+button {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  background-color: var(--bg-tertiary);
+  color: var(--button-text);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.btn:hover {
+  background-color: var(--bg-secondary);
+  color: var(--button-hover-text);
+  border-color: var(--accent-gold);
+}
+
+.btn-primary {
+  background-color: var(--accent-gold);
+  color: var(--white);
+  border-color: var(--accent-gold);
+}
+
+.btn-primary:hover {
+  background-color: var(--button-hover-text);
+  border-color: var(--button-hover-text);
+}
+
+.btn-secondary {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Cards */
+.card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px var(--card-shadow);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 6px var(--card-shadow);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+}
+
+th,
+td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background-color: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+tr:hover {
+  background-color: var(--bg-tertiary);
+}
+
+/* Status Colors */
+.status-ok {
+  color: var(--green-500);
+}
+
+.status-error {
+  color: var(--red-500);
+}
+
+.status-warning {
+  color: var(--amber-400);
+}
+
+/* Utilities */
+.text-center {
+  text-align: center;
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.mt-1 {
+  margin-top: 0.5rem;
+}
+
+.mt-2 {
+  margin-top: 1rem;
+}
+
+.mt-3 {
+  margin-top: 1.5rem;
+}
+
+.mt-4 {
+  margin-top: 2rem;
+}
+
+.mb-1 {
+  margin-bottom: 0.5rem;
+}
+
+.mb-2 {
+  margin-bottom: 1rem;
+}
+
+.mb-3 {
+  margin-bottom: 1.5rem;
+}
+
+.mb-4 {
+  margin-bottom: 2rem;
+}
+
+.p-1 {
+  padding: 0.5rem;
+}
+
+.p-2 {
+  padding: 1rem;
+}
+
+.p-3 {
+  padding: 1.5rem;
+}
+
+.p-4 {
+  padding: 2rem;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gray-500);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-600);
+}
+
+/* Loading animation */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease;
+}

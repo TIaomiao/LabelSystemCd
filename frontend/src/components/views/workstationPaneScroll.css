@@ -1,0 +1,26 @@
+.workstation-scroll-pane {
+  scrollbar-gutter: stable;
+}
+
+.workstation-scroll-pane::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.workstation-scroll-pane::-webkit-scrollbar-track {
+  background: #141414;
+}
+
+.workstation-scroll-pane::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  border: 2px solid #141414;
+}
+
+.workstation-scroll-pane::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.workstation-scroll-pane::-webkit-scrollbar-corner {
+  background: #141414;
+}

@@ -1,0 +1,92 @@
+# secrets / local env
+.env
+.env.*
+*.key
+*.pem
+cookies.txt
+*.cookie
+*.cookies
+.codex
+ai_v2_agent/ai_v2_config.py
+backend/src/config/api_config*.json
+backend/src/config/*.local.json
+backend/src/config/settings.py
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venvs/
+venv/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+build/
+
+# runtime state
+logs/
+*.log
+tmp/
+zian_workspace/
+instance/
+backend/instance/
+.cvi-workspace/
+backend/recovered_structure.txt
+backend/*.recovered
+
+# databases
+*.db
+*.sqlite
+*.sqlite3
+
+# medical / patient data
+data/
+datasets/
+uploads/
+exports/
+backend/data_sources/
+ai_v2_agent/manifest_report*.json
+*.dcm
+*.dicom
+*.nii
+*.nii.gz
+*.csv
+*.tsv
+*.jsonl
+
+# generated exports / backups / archives
+backups/
+*.zip
+*.tar.gz
+*.7z
+*.rar
+*.docx
+*.xlsx
+*.pptx
+
+# model weights / checkpoints
+backend/checkpoints/
+CMR_segmentation_bundle_20260320/models/
+CMR_segmentation_bundle_20260320/smoke_output/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+
+# local tunnels / deployment secrets
+frp_*/
+*.ini
+
+# embedded third-party checkout; add as a real submodule or documented dependency if needed
+third_party/EdgeTAM/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,27 @@
+{
+  "name": "cvi42-style-cmr-workstation",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web",
+    "apps/voice-desktop"
+  ],
+  "scripts": {
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
+    "dev:api": "py -m uvicorn apps.api.main:app --reload --app-dir .",
+    "dev:web": "npm.cmd --prefix apps/web run dev",
+    "dev:voice": "powershell -ExecutionPolicy Bypass -File scripts/dev_voice.ps1",
+    "dev:voice:desktop": "npm.cmd --prefix apps/voice-desktop run dev",
+    "dev:voice:engine": "py -m uvicorn main:app --reload --app-dir apps/voice-engine --host 127.0.0.1 --port 8765",
+    "build:web": "npm.cmd --prefix apps/web run build",
+    "build:voice:desktop": "npm.cmd --prefix apps/voice-desktop run build",
+    "package:voice": "npm.cmd --prefix apps/voice-desktop run dist:win",
+    "package:voice:cpu": "node scripts/package_voice_variant.mjs cpu",
+    "package:voice:gpu": "node scripts/package_voice_variant.mjs gpu",
+    "package:voice:cloud": "node scripts/package_voice_variant.mjs cloud",
+    "test:api": "py -m unittest discover -s tests -p \"test_*.py\"",
+    "test:voice:desktop": "npm.cmd --prefix apps/voice-desktop run test",
+    "test:voice:engine": "py -m unittest discover -s tests -p \"test_voice_*.py\"",
+    "export:openapi": "py scripts/export_openapi.py"
+  }
+}

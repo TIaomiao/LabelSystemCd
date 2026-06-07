@@ -1,0 +1,250 @@
+.session-history {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.session-history.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-history.empty .empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.session-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.session-count {
+  display: inline-block;
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.session-search {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.search-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  transition: border-color 0.2s ease;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.1);
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+}
+
+.no-results {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 20px 10px;
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  margin: 0 4px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.session-item:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+}
+
+.session-item.active {
+  background: rgba(217, 119, 6, 0.1);
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+}
+
+.session-item.completed {
+  border-left: 3px solid var(--success-color);
+}
+
+.session-item.processing {
+  border-left: 3px solid var(--warning-color);
+}
+
+.session-item.failed {
+  border-left: 3px solid var(--error-color);
+}
+
+.session-item.pending {
+  border-left: 3px solid var(--text-muted);
+}
+
+.session-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.session-id {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status-icon {
+  font-size: 12px;
+  min-width: 14px;
+}
+
+.id-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.session-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.session-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  margin-left: 8px;
+}
+
+.session-item:hover .session-actions {
+  opacity: 1;
+}
+
+.session-delete-btn {
+  background: none;
+  border: none;
+  color: var(--error-color);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+}
+
+.session-delete-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--error-color);
+}
+
+.session-indicator {
+  font-size: 12px;
+  color: var(--accent-gold);
+  margin-left: 8px;
+  font-weight: bold;
+  animation: indicator-pulse 1s ease-in-out infinite;
+}
+
+@keyframes indicator-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* 滚动条样式 */
+.session-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.session-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.session-list::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-color);
+  border-radius: 3px;
+}
+
+.session-list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover-color);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .session-history {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .session-item {
+    padding: 8px 10px;
+  }
+
+  .session-header h3 {
+    font-size: 13px;
+  }
+}

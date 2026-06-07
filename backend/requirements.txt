@@ -1,0 +1,10 @@
+flask
+flask-cors
+pydicom
+numpy
+Pillow
+torch
+torchvision
+segment-anything
+flask-sqlalchemy
+flask-login

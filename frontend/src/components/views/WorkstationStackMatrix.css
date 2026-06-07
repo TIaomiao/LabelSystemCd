@@ -1,0 +1,246 @@
+.stack-matrix {
+  margin-top: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: #232323;
+  overflow: hidden;
+}
+
+.stack-matrix-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #b0b0b0;
+}
+
+.stack-matrix-header strong {
+  color: #f1f1f1;
+}
+
+.stack-matrix-header-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.stack-matrix-header-copy > span {
+  font-size: 10px;
+  color: #8f8f8f;
+}
+
+.matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px 8px;
+  font-size: 10px;
+}
+
+.matrix-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #b0b0b0;
+}
+
+.matrix-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.matrix-legend-swatch.is-filled {
+  background: rgba(87, 227, 137, 0.18);
+  border-color: rgba(87, 227, 137, 0.32);
+}
+
+.matrix-legend-swatch.is-selected {
+  background: rgba(208, 233, 114, 0.14);
+  border-color: rgba(209, 234, 114, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(209, 234, 114, 0.35);
+}
+
+.matrix-legend-badge {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.matrix-legend-badge.is-ed {
+  background: rgba(84, 203, 126, 0.18);
+  color: #8ef0a9;
+  border-color: rgba(84, 203, 126, 0.35);
+}
+
+.matrix-legend-badge.is-es {
+  background: rgba(255, 107, 107, 0.16);
+  color: #ff9a9a;
+  border-color: rgba(255, 107, 107, 0.32);
+}
+
+.stack-matrix-scroll {
+  overflow: auto;
+}
+
+.stack-matrix-grid {
+  display: grid;
+  min-width: 100%;
+}
+
+.matrix-corner,
+.matrix-head,
+.matrix-side,
+.matrix-cell {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  min-height: 32px;
+  padding: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font: inherit;
+}
+
+.matrix-corner {
+  display: grid;
+  place-items: center;
+  background: #2d2d2d;
+  color: #b0b0b0;
+  font-size: 11px;
+}
+
+.matrix-head,
+.matrix-side,
+.matrix-cell {
+  background: #313131;
+  color: #f1f1f1;
+  border-left: 0;
+  border-top: 0;
+}
+
+.matrix-head,
+.matrix-side {
+  font-size: 11px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.matrix-head {
+  position: relative;
+}
+
+.matrix-head-index {
+  display: inline-block;
+}
+
+.matrix-head.is-active,
+.matrix-side.is-active {
+  background: #5d7428;
+  color: #f5f5f5;
+}
+
+.matrix-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.matrix-cell.has-contours {
+  background: radial-gradient(circle at 50% 50%, rgba(87, 227, 137, 0.1), transparent 58%), #313131;
+}
+
+.matrix-cell.has-selected {
+  box-shadow: inset 0 0 0 1px #d1ea72bf;
+}
+
+.matrix-cell.is-active {
+  background: #4d5f20;
+  box-shadow: inset 0 0 0 2px #d1ea72;
+}
+
+.matrix-head:hover,
+.matrix-side:hover,
+.matrix-cell:hover:not(:disabled) {
+  background-color: #3a3a3a;
+}
+
+.matrix-head.is-active:hover,
+.matrix-side.is-active:hover,
+.matrix-cell.is-active:hover {
+  background-color: #4d5f20;
+}
+
+.matrix-cell:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.matrix-markers {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.matrix-phase-tag,
+.matrix-cell-tag {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.matrix-phase-tag.ed,
+.matrix-cell-tag.ed {
+  background: rgba(84, 203, 126, 0.18);
+  color: #8ef0a9;
+  border: 1px solid rgba(84, 203, 126, 0.35);
+}
+
+.matrix-phase-tag.es,
+.matrix-cell-tag.es {
+  background: rgba(255, 107, 107, 0.16);
+  color: #ff9a9a;
+  border: 1px solid rgba(255, 107, 107, 0.32);
+}
+
+.matrix-phase-tag {
+  top: 3px;
+  right: 3px;
+}
+
+.matrix-cell-tag {
+  top: 3px;
+  left: 3px;
+}
+
+.matrix-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d8f271;
+}

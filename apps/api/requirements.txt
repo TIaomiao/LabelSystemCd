@@ -1,0 +1,9 @@
+fastapi>=0.128,<1
+uvicorn[standard]>=0.39,<1
+pydicom>=2.4,<3
+numpy>=1.26,<2
+nibabel>=5.0,<6
+pillow>=11,<12
+scikit-image>=0.24,<0.25
+reportlab>=4.4,<5
+pydantic-settings>=2.11,<3

@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="node_modules/cornerstone-core/dist/cornerstone.js"></script>
+  <script src="node_modules/cornerstone-math/dist/cornerstoneMath.js"></script>
+  <script src="node_modules/cornerstone-tools/dist/cornerstoneTools.js"></script>
+</head>
+<body>
+  <script>
+    console.log(cornerstoneTools.FreehandScissorsTool ? 'Exists' : 'Undefined');
+    console.log(Object.keys(cornerstoneTools).filter(k => k.includes('Scissors')));
+  </script>
+</body>
+</html>

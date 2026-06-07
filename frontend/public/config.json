@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "apiBase": "/api",
+  "checkUpdateInterval": 3600000,
+  "maxFileSize": 5368709120,
+  "supportedFormats": [".zip", ".tar", ".tar.gz"],
+  "features": {
+    "darkMode": true,
+    "localStorage": true,
+    "multiTab": true,
+    "aiChat": true
+  }
+}

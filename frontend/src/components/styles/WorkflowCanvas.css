@@ -1,0 +1,270 @@
+.workflow-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.workflow-canvas.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-canvas.empty .empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.workflow-svg {
+  min-width: 100%;
+  min-height: 100%;
+  cursor: grab;
+  display: block;
+  color: var(--text-primary);
+}
+
+.workflow-svg:active {
+  cursor: grabbing;
+}
+
+.svg-bg-rect {
+  fill: var(--bg-primary);
+}
+
+.svg-grid-rect {
+  fill: url(#grid);
+}
+
+/* 边样式 */
+.workflow-edge {
+  stroke: var(--text-secondary);
+  stroke-linecap: round;
+  fill: none;
+}
+
+.workflow-arrow {
+  color: var(--text-secondary);
+}
+
+/* 边动画入场 */
+.edge-animated {
+  animation: edge-appear 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes edge-appear {
+  from {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+    opacity: 0;
+  }
+  to {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+/* 节点样式 */
+.workflow-node {
+  cursor: grab;
+  transition: filter 0.2s ease;
+}
+
+/* 节点动画入场 */
+.workflow-node.node-animated {
+  animation: node-appear 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes node-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.workflow-node:hover .node-bg {
+  filter: brightness(1.05);
+  box-shadow: 0 2px 8px var(--card-shadow);
+}
+
+.node-bg {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+  stroke-width: 2;
+  transition: fill 0.3s ease, stroke 0.3s ease;
+}
+
+.workflow-node.current .node-bg {
+  fill: rgba(217, 119, 6, 0.1);
+  stroke: var(--accent-gold);
+  stroke-width: 3;
+}
+
+.workflow-node.completed .node-bg {
+  fill: rgba(34, 197, 94, 0.1);
+  stroke: var(--success-color);
+}
+
+/* 节点脉冲动画（当前节点） */
+.node-pulse {
+  fill: none;
+  stroke: var(--accent-gold);
+  stroke-width: 2;
+  animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    r: 0;
+    opacity: 1;
+  }
+  100% {
+    r: 150%;
+    opacity: 0;
+  }
+}
+
+/* 节点文本 */
+.node-text {
+  font-size: 13px;
+  font-weight: 500;
+  fill: var(--text-primary);
+  pointer-events: none;
+  user-select: none;
+}
+
+.workflow-node.current .node-text {
+  fill: var(--accent-gold);
+  font-weight: 600;
+}
+
+.workflow-node.completed .node-text {
+  fill: var(--success-color);
+}
+
+/* 状态指示器 */
+.status-running {
+  fill: var(--warning-color);
+  animation: status-pulse 1s ease-in-out infinite;
+}
+
+.status-completed {
+  fill: var(--success-color);
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* 步骤节点样式 */
+.step-bg {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+}
+
+.workflow-node.step-node:hover .step-bg {
+  fill: var(--bg-tertiary);
+  stroke: var(--text-secondary);
+}
+
+.workflow-node.current .step-bg {
+  fill: rgba(217, 119, 6, 0.1);
+  stroke: var(--accent-gold);
+}
+
+.workflow-node.completed .step-bg {
+  fill: rgba(34, 197, 94, 0.1);
+  stroke: var(--success-color);
+}
+
+/* 工具节点样式 */
+.tool-bg {
+  fill: rgba(255, 193, 7, 0.2);
+  stroke: var(--warning-color);
+}
+
+.workflow-node.tool-node:hover .tool-bg {
+  fill: rgba(255, 193, 7, 0.3);
+  stroke: var(--warning-color);
+}
+
+.workflow-node.current .tool-bg {
+  fill: rgba(255, 193, 7, 0.4);
+  stroke: var(--accent-gold);
+  stroke-width: 3;
+}
+
+.workflow-node.completed .tool-bg {
+  fill: rgba(34, 197, 94, 0.1);
+  stroke: var(--success-color);
+}
+
+/* 工具节点图标 */
+.tool-icon {
+  pointer-events: none;
+  user-select: none;
+  fill: var(--warning-color);
+}
+
+/* 工具提示 */
+.workflow-help {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* 固定在顶部的工具提示 */
+.workflow-help-fixed {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: auto;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* 响应式 */
+@media (max-width: 1024px) {
+  .workflow-canvas {
+    height: 250px;
+  }
+
+  .node-text {
+    font-size: 11px;
+  }
+}
