@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from pathlib import Path
 import pydicom
 from pydicom.pixel_data_handlers.util import apply_voi_lut
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import io
 import numpy as np
 import pandas as pd
@@ -27,7 +27,8 @@ import httpx
 from openai import OpenAI
 from flask_login import login_user, logout_user, login_required, current_user
 from extensions import db
-from models import User, UserMessage, EvaluationResult, FunctionalAssessment, LGEAnalysis, ImageAnalysis, StructureAssessment, OtherFindings, SegmentationAnnotation, CardiacAnnotation, CviCaseCatalog, CaseAssignment, MediaAccessLog
+from models import User, UserMessage, EvaluationResult, FunctionalAssessment, LGEAnalysis, ImageAnalysis, StructureAssessment, OtherFindings, SegmentationAnnotation, CardiacAnnotation, CviCaseCatalog, CaseAssignment, MediaAccessLog, FeedbackSession, FeedbackMessage, FeedbackAttachment, FeedbackIssue, FeedbackWorkPlan
+from feedback_agent import build_messages as build_feedback_agent_messages, derive_session_title, normalize_agent_result, redact_external_text, safe_page_context
 from utils_cardiac.report_parser import ReportParser
 
 # Helper for Excel Data Sources
@@ -67,6 +68,9 @@ LLM_GATEWAY_CONFIG_PATH = INSTANCE_DIR / 'llm_gateway_config.json'
 LLM_METRIC_CACHE_DIR = INSTANCE_DIR / 'llm_metric_cache'
 LLM_GATEWAY_MODEL_CACHE_PATH = INSTANCE_DIR / 'llm_gateway_models_cache.json'
 LLM_METRIC_SUGGESTION_CACHE_PATH = INSTANCE_DIR / 'llm_metric_suggestions_cache.json'
+FEEDBACK_ATTACHMENT_DIR = INSTANCE_DIR / 'feedback_attachments'
+FEEDBACK_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
+FEEDBACK_ATTACHMENT_MAX_DIMENSION = 2400
 EVAL_EXPORT_DIR = INSTANCE_DIR / 'eval_exports'
 eval_export_jobs_lock = Lock()
 eval_export_jobs = {}
@@ -2139,7 +2143,7 @@ import sys
 import threading
 import queue
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 # Add src to sys.path
@@ -2295,6 +2299,37 @@ def require_admin(view):
     return wrapped
 
 
+def require_feedback_dashboard_viewer(view):
+    """Permit the dedicated test observer account to inspect feedback, not mutate it."""
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        configured = {
+            username.strip()
+            for username in os.environ.get('LABELSYSTEM_FEEDBACK_DASHBOARD_VIEWERS', 'ziantestpov').split(',')
+            if username.strip()
+        }
+        if getattr(current_user, 'is_admin', False) or current_user.username in configured:
+            return view(*args, **kwargs)
+        return jsonify({'error': 'Feedback dashboard access required'}), 403
+    return wrapped
+
+
+def require_feedback_operator(view):
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        configured = {
+            username.strip()
+            for username in os.environ.get('LABELSYSTEM_FEEDBACK_OPERATORS', 'ziantestpov').split(',')
+            if username.strip()
+        }
+        if getattr(current_user, 'is_admin', False) or current_user.username in configured:
+            return view(*args, **kwargs)
+        return jsonify({'error': 'Feedback operator privileges required'}), 403
+    return wrapped
+
+
 
 
 def _assignment_report100_list_path() -> Path | None:
@@ -2393,8 +2428,79 @@ def _assignment_case_detail_lookup(case_ids):
     return details
 
 
-def _assignment_case_library_presets():
+def _assignment_catalog_case_details(dataset):
+    rows = (
+        CviCaseCatalog.query
+        .filter_by(source='functional', dataset=dataset, has_dicom=True)
+        .order_by(CviCaseCatalog.id.asc())
+        .all()
+    )
+    width = max(3, len(str(max(1, len(rows)))))
+    details = []
+    try:
+        from cvi_workstation import _case_display_identity, _public_case_code
+    except ImportError:
+        _case_display_identity = None
+        _public_case_code = None
+
+    for index, row in enumerate(rows):
+        identity = (
+            _case_display_identity(row.dataset, row.case_id)
+            if _case_display_identity is not None
+            else {'primary_id_label': '', 'primary_id': ''}
+        )
+        public_case_code = (
+            _public_case_code(row.case_id)
+            if _public_case_code is not None
+            else _assignment_public_case_code(row.case_id)
+        )
+        details.append({
+            'case_id': row.case_id,
+            'case_name': row.case_id,
+            'anon_label': f"病例{index + 1:0{width}d}",
+            'library_order': index + 1,
+            'public_case_code': public_case_code,
+            'primary_id_label': str(identity.get('primary_id_label') or ''),
+            'primary_id': str(identity.get('primary_id') or ''),
+            'register_id': str(identity.get('primary_id') or ''),
+            'has_dicom': bool(row.has_dicom),
+            'is_imported': row.cvi_study_id is not None,
+            'sequence_summary': row.sequence_summary or [],
+        })
+    return details
+
+
+def _assignment_dataset_library_presets():
     presets = []
+    for item in current_app.config.get('CVI_LIBRARY_MULTICENTER_ROOTS', []) or []:
+        dataset = str(item.get('dataset') or '').strip()
+        if not dataset:
+            continue
+        case_count = (
+            CviCaseCatalog.query
+            .filter_by(source='functional', dataset=dataset, has_dicom=True)
+            .count()
+        )
+        label = str(item.get('label') or dataset).strip()
+        presets.append({
+            'id': f'dataset:{dataset}',
+            'label': f'{label} · 全部已登记病例',
+            'namespace': 'functional',
+            'dataset': dataset,
+            'case_ids': [],
+            'case_details': [],
+            'case_count': case_count,
+            'kind': 'dataset',
+            'lazy': True,
+            'source': 'cvi_case_catalog',
+            'description': f'{label}工作站病例目录；库内序号按首次登记顺序生成，仅在当前数据集内有效。',
+            'identifier_labels': ['库内序号', '登记号/检查号', '匿名病例号', '病例 ID'],
+        })
+    return presets
+
+
+def _assignment_case_library_presets():
+    presets = _assignment_dataset_library_presets()
     report100_path = current_app.config.get('CMR_ALL_REPORT100_CASE_LIST')
     report100_cases = []
     if report100_path:
@@ -2415,16 +2521,85 @@ def _assignment_case_library_presets():
             case_details.append(detail)
         presets.append({
             'id': 'km_report100_2025',
-            'label': '昆医附二院报告评分100例（2025）',
+            'label': '专项子集：昆医附二院报告评分100例（2025）',
             'namespace': 'functional',
             'dataset': 'CMR_ALL',
             'case_ids': report100_cases,
             'case_details': case_details,
             'case_count': len(report100_cases),
-            'source': str(report100_path),
+            'kind': 'subset',
+            'lazy': False,
+            'source': 'configured_report_subset',
             'description': '当前替换后的昆医附二院 2025 年报告评分病例库，可直接分配给标记者。',
+            'identifier_labels': ['子集序号', '登记号/检查号', '病例 ID'],
         })
     return presets
+
+
+def _assignment_preset_by_id(preset_id):
+    return next(
+        (item for item in _assignment_case_library_presets() if item['id'] == preset_id),
+        None,
+    )
+
+
+def _assignment_details_for_preset(preset):
+    if not preset:
+        return []
+    if preset.get('kind') == 'dataset':
+        return _assignment_catalog_case_details(preset['dataset'])
+    return [dict(item) for item in (preset.get('case_details') or [])]
+
+
+def _assignment_case_aliases(detail):
+    aliases = {
+        str(detail.get('case_id') or '').strip(),
+        Path(str(detail.get('case_id') or '')).name.strip(),
+        str(detail.get('anon_label') or '').strip(),
+        str(detail.get('public_case_code') or '').strip(),
+        str(detail.get('primary_id') or detail.get('register_id') or '').strip(),
+    }
+    return {alias.casefold() for alias in aliases if alias and alias != '-'}
+
+
+def _resolve_assignment_identifier_selection(raw_selection, case_details):
+    tokens = [
+        item.strip()
+        for item in re.split(r'[\n,，;；、]+', str(raw_selection or ''))
+        if item.strip()
+    ]
+    if not tokens:
+        raise ValueError('Missing case selection')
+
+    alias_map = {}
+    for detail in case_details:
+        for alias in _assignment_case_aliases(detail):
+            alias_map.setdefault(alias, []).append(detail['case_id'])
+
+    selected = []
+    selected_set = set()
+    unmatched_count = 0
+    ambiguous_count = 0
+    for token in tokens:
+        matches = alias_map.get(token.casefold(), [])
+        if not matches:
+            unmatched_count += 1
+            continue
+        if len(matches) > 1:
+            ambiguous_count += 1
+        for case_id in matches:
+            if case_id not in selected_set:
+                selected.append(case_id)
+                selected_set.add(case_id)
+
+    if not selected:
+        raise ValueError('没有匹配到病例，请检查登记号、检查号或病例 ID')
+    warnings = []
+    if unmatched_count:
+        warnings.append(f'{unmatched_count} 个输入标识未匹配')
+    if ambiguous_count:
+        warnings.append(f'{ambiguous_count} 个输入标识匹配到多次检查，已全部列入预览')
+    return selected, warnings
 
 
 def _parse_assignment_ordered_case_selection(raw_selection, ordered_case_ids):
@@ -2483,6 +2658,24 @@ def _parse_assignment_ordered_case_selection(raw_selection, ordered_case_ids):
     if not selected:
         raise ValueError('No cases selected')
     return selected
+
+
+def _resolve_assignment_preset_selection(preset, raw_selection, selection_mode):
+    case_details = _assignment_details_for_preset(preset)
+    ordered_case_ids = [item['case_id'] for item in case_details]
+    if selection_mode == 'order':
+        normalized = str(raw_selection or '').strip()
+        if normalized.casefold() in {'all', '全部'}:
+            selected = ordered_case_ids
+        else:
+            selected = _parse_assignment_ordered_case_selection(normalized, ordered_case_ids)
+        warnings = []
+    elif selection_mode == 'identifier':
+        selected, warnings = _resolve_assignment_identifier_selection(raw_selection, case_details)
+    else:
+        raise ValueError('Invalid selection mode')
+    detail_map = {item['case_id']: item for item in case_details}
+    return selected, [detail_map[item] for item in selected if item in detail_map], warnings
 
 
 def _client_ip() -> str:
@@ -3330,6 +3523,312 @@ def _security_overview():
         'watermark_enabled': os.environ.get('LABELSYSTEM_IMAGE_WATERMARK', '1').lower() not in {'0', 'false', 'no'},
     }
 
+
+def _feedback_session_for_user(session_id, user=None, allow_admin=False):
+    session_record = FeedbackSession.query.get(session_id)
+    actor = user or current_user
+    if session_record is None:
+        return None
+    if allow_admin and getattr(actor, 'is_admin', False):
+        return session_record
+    if int(session_record.user_id) != int(actor.id):
+        return None
+    return session_record
+
+
+def _run_feedback_agent(history, page_context, category_hint, reasoning_level, attachments=None):
+    config = _load_llm_gateway_config()
+    if not config.get('enabled'):
+        raise RuntimeError('AI 服务当前未启用')
+    client = _llm_gateway_client(config)
+    fallback_model = str(config.get('model') or DEFAULT_LLM_GATEWAY_CONFIG['model']).strip()
+    preferred_model = str(os.environ.get('LABELSYSTEM_FEEDBACK_MODEL') or fallback_model).strip()
+    messages = build_feedback_agent_messages(
+        history,
+        page_context=page_context,
+        category_hint=category_hint,
+    )
+    if attachments:
+        image_items = []
+        for attachment in attachments[:4]:
+            try:
+                image_bytes = Path(attachment.storage_path).read_bytes()
+            except OSError:
+                continue
+            image_items.append({
+                'type': 'image_url',
+                'image_url': {
+                    'url': f'data:{attachment.mime_type};base64,{base64.b64encode(image_bytes).decode("ascii")}',
+                    'detail': 'high',
+                },
+            })
+        if image_items:
+            for item in reversed(messages):
+                if item.get('role') == 'user':
+                    item['content'] = [
+                        {'type': 'text', 'text': str(item.get('content') or '')},
+                        *image_items,
+                    ]
+                    break
+    started = time.time()
+    attempts = [(preferred_model, True)]
+    if fallback_model and fallback_model != preferred_model:
+        attempts.append((fallback_model, False))
+    else:
+        attempts.append((preferred_model, False))
+    last_error = None
+    for model_name, use_reasoning_contract in attempts:
+        try:
+            request_payload = {
+                'model': model_name,
+                'messages': messages,
+                'max_tokens': max(int(config.get('max_tokens') or 1200), 1600),
+            }
+            if use_reasoning_contract:
+                request_payload.update({
+                    'response_format': {'type': 'json_object'},
+                    'extra_body': {'reasoning_effort': reasoning_level},
+                })
+            response = client.chat.completions.create(**request_payload)
+            response_text = (response.choices[0].message.content or '').strip()
+            return {
+                **normalize_agent_result(response_text),
+                'model_name': model_name,
+                'latency_ms': int((time.time() - started) * 1000),
+            }
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError('AI 服务暂时不可用') from last_error
+
+
+def _safe_feedback_change_scope(ticket):
+    requested = str(ticket.get('change_scope') or 'needs_review')
+    if requested != 'minimal_candidate':
+        return requested
+    text = ' '.join(str(ticket.get(key) or '') for key in (
+        'category', 'title', 'summary', 'operation', 'expected_behavior', 'actual_behavior'
+    )).lower()
+    blocked_terms = {
+        'dicom', '标注', '轮廓', '测量', '公式', '报告', '诊断', '权限', '数据库',
+        '删除', '模型', '传播', '分割', '批量', '部署', '服务', '接口', '病例',
+    }
+    if ticket.get('category') != 'bug' or any(term in text for term in blocked_terms):
+        return 'needs_review'
+    return 'minimal_candidate'
+
+
+def _feedback_work_plan_payload(issue):
+    raw = {
+        'category': issue.category,
+        'title': issue.title,
+        'summary': issue.summary,
+        'page': issue.page,
+        'operation': issue.operation,
+        'expected_behavior': issue.expected_behavior,
+        'actual_behavior': issue.actual_behavior,
+        'impact': issue.impact,
+        'severity': issue.severity,
+        'acceptance_criteria': issue.acceptance_criteria,
+        'change_scope': issue.change_scope,
+    }
+    return {key: redact_external_text(value) for key, value in raw.items()}
+
+
+def _normalize_feedback_work_plan(raw_text, issue):
+    parsed = _extract_json_object(raw_text)
+    if not isinstance(parsed, dict):
+        parsed = {
+            'solution_summary': str(raw_text or '').strip() or '未生成有效方案。',
+            'implementation_steps': [],
+            'risks': [],
+            'verification_steps': [],
+            'execution_scope': 'needs_review',
+            'codex_brief': '',
+        }
+    def text(key, default=''):
+        return str(parsed.get(key) or default).strip()
+    def text_list(key):
+        value = parsed.get(key)
+        return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
+    risks = []
+    for item in parsed.get('risks') if isinstance(parsed.get('risks'), list) else []:
+        if isinstance(item, dict):
+            risks.append({
+                'level': str(item.get('level') or 'medium').strip(),
+                'risk': str(item.get('risk') or '').strip(),
+                'mitigation': str(item.get('mitigation') or '').strip(),
+            })
+    scope = text('execution_scope', 'needs_review')
+    if scope not in {'guidance_only', 'minimal_candidate', 'needs_review', 'large_change'}:
+        scope = 'needs_review'
+    codex_brief = text('codex_brief')
+    if not codex_brief:
+        codex_brief = (
+            f'处理工作站反馈：{issue.title}\n'
+            f'问题摘要：{issue.summary}\n'
+            f'发生页面：{issue.page}\n'
+            f'实际表现：{issue.actual_behavior}\n'
+            f'期望表现：{issue.expected_behavior}\n'
+            f'验收标准：{issue.acceptance_criteria}\n'
+            '先只读定位调用链，给出最小改动方案、风险和验证结果；未经批准不要修改数据、标注、数据库或服务。'
+        )
+    return {
+        'solution_summary': text('solution_summary', '需人工补充解决方案。'),
+        'implementation_steps': text_list('implementation_steps'),
+        'risks': risks,
+        'verification_steps': text_list('verification_steps'),
+        'execution_scope': scope,
+        'codex_brief': codex_brief,
+    }
+
+
+def _generate_feedback_work_plan(issue, revision_note=''):
+    config = _load_llm_gateway_config()
+    if not config.get('enabled'):
+        raise RuntimeError('AI 服务当前未启用')
+    client = _llm_gateway_client(config)
+    model_name = str(config.get('model') or DEFAULT_LLM_GATEWAY_CONFIG['model']).strip()
+    issue_payload = _feedback_work_plan_payload(issue)
+    messages = [
+        {
+            'role': 'system',
+            'content': (
+                '你是 CMR 工作站的工程方案审查助手。根据已结构化的问题单，生成可供负责人确认的修复方案。'
+                '不要声称已经检查代码或执行修改；不能把 DICOM、标注、测量、报告、权限、数据库、模型、部署或批处理归为小修复。'
+                '只输出 JSON：solution_summary、implementation_steps（字符串数组）、'
+                'risks（含 level/risk/mitigation 的数组）、verification_steps（字符串数组）、'
+                'execution_scope（guidance_only|minimal_candidate|needs_review|large_change）、codex_brief。'
+            ),
+        },
+        {
+            'role': 'user',
+            'content': json.dumps({
+                'issue': issue_payload,
+                'revision_note': redact_external_text(revision_note),
+            }, ensure_ascii=False),
+        },
+    ]
+    response_text = ''
+    last_error = None
+    for structured in (True, False):
+        try:
+            payload = {
+                'model': model_name,
+                'messages': messages,
+                'max_tokens': max(int(config.get('max_tokens') or 1200), 1400),
+            }
+            if structured:
+                payload['response_format'] = {'type': 'json_object'}
+            response = client.chat.completions.create(**payload)
+            response_text = (response.choices[0].message.content or '').strip()
+            break
+        except Exception as exc:
+            last_error = exc
+    if not response_text:
+        raise RuntimeError('方案生成暂不可用') from last_error
+    result = _normalize_feedback_work_plan(response_text, issue)
+    if revision_note.strip():
+        result['revision_note'] = redact_external_text(revision_note).strip()
+    return result
+
+
+def _upsert_feedback_issue(session_record, source_message, ticket):
+    category = str(ticket.get('category') or 'other')
+    issue = None
+    if category != 'ai_experience':
+        issue = (
+            FeedbackIssue.query
+            .filter_by(session_id=session_record.id, category=category)
+            .filter(FeedbackIssue.status.notin_(['fixed', 'closed']))
+            .order_by(FeedbackIssue.updated_at.desc())
+            .first()
+        )
+    if issue is None:
+        issue = FeedbackIssue(
+            session_id=session_record.id,
+            reporter_id=session_record.user_id,
+            category=category,
+            title=str(ticket.get('title') or '未命名问题')[:200],
+        )
+        db.session.add(issue)
+    issue.source_message_id = source_message.id
+    issue.category = category
+    issue.title = str(ticket.get('title') or issue.title or '未命名问题')[:200]
+    issue.summary = str(ticket.get('summary') or '')
+    issue.page = str(ticket.get('page') or '')[:120]
+    issue.operation = str(ticket.get('operation') or '')
+    issue.expected_behavior = str(ticket.get('expected_behavior') or '')
+    issue.actual_behavior = str(ticket.get('actual_behavior') or '')
+    issue.impact = str(ticket.get('impact') or '')
+    issue.severity = str(ticket.get('severity') or 'medium')
+    issue.acceptance_criteria = str(ticket.get('acceptance_criteria') or '')
+    issue.change_scope = _safe_feedback_change_scope(ticket)
+    issue.status = 'open'
+    issue.updated_at = datetime.utcnow()
+    return issue
+
+
+def _parse_feedback_datetime(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _store_feedback_attachment(upload, session_record):
+    raw = upload.stream.read(FEEDBACK_ATTACHMENT_MAX_BYTES + 1)
+    if not raw:
+        raise ValueError('截图文件为空')
+    if len(raw) > FEEDBACK_ATTACHMENT_MAX_BYTES:
+        raise ValueError('单张截图不能超过 8MB')
+    try:
+        image = Image.open(io.BytesIO(raw))
+        if str(image.format or '').upper() not in {'PNG', 'JPEG', 'WEBP'}:
+            raise ValueError('仅支持 PNG、JPEG 或 WebP 图片')
+        image = ImageOps.exif_transpose(image)
+        image.load()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError('无法识别这张截图') from exc
+    if image.width < 1 or image.height < 1 or image.width * image.height > 30_000_000:
+        raise ValueError('截图尺寸不合法或像素过大')
+    if max(image.width, image.height) > FEEDBACK_ATTACHMENT_MAX_DIMENSION:
+        image.thumbnail(
+            (FEEDBACK_ATTACHMENT_MAX_DIMENSION, FEEDBACK_ATTACHMENT_MAX_DIMENSION),
+            Image.Resampling.LANCZOS,
+        )
+    if image.mode not in {'RGB', 'RGBA'}:
+        image = image.convert('RGBA' if 'transparency' in image.info else 'RGB')
+    encoded = io.BytesIO()
+    image.save(encoded, format='PNG', optimize=True)
+    payload = encoded.getvalue()
+    user_dir = FEEDBACK_ATTACHMENT_DIR / str(session_record.user_id)
+    user_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    storage_path = user_dir / f'{uuid.uuid4().hex}.png'
+    storage_path.write_bytes(payload)
+    try:
+        os.chmod(storage_path, 0o600)
+    except OSError:
+        pass
+    original_name = secure_filename(str(upload.filename or '').strip()) or 'screenshot.png'
+    record = FeedbackAttachment(
+        session_id=session_record.id,
+        uploader_id=session_record.user_id,
+        storage_path=str(storage_path),
+        original_name=original_name[:255],
+        mime_type='image/png',
+        size_bytes=len(payload),
+        width=image.width,
+        height=image.height,
+        created_at=datetime.utcnow(),
+    )
+    db.session.add(record)
+    return record
+
 def register_routes(app):
     # Register new diagnosis blueprint
     from diagnosis_module.routes import diagnosis_bp
@@ -3727,6 +4226,542 @@ def register_routes(app):
             message_record.read_at = datetime.utcnow()
             db.session.commit()
         return jsonify({'message': message_record.to_dict(), 'status': 'ok'})
+
+    @app.route('/api/feedback/sessions', methods=['GET', 'POST'])
+    @login_required
+    def feedback_sessions():
+        if request.method == 'GET':
+            records = (
+                FeedbackSession.query
+                .filter_by(user_id=current_user.id)
+                .order_by(FeedbackSession.last_message_at.desc())
+                .limit(60)
+                .all()
+            )
+            return jsonify({'sessions': [item.to_dict() for item in records]})
+
+        payload = request.json or {}
+        context = safe_page_context(payload.get('page_context'))
+        record = FeedbackSession(
+            user_id=current_user.id,
+            title='新对话',
+            context_json=context,
+            status='active',
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            last_message_at=datetime.utcnow(),
+        )
+        db.session.add(record)
+        db.session.commit()
+        return jsonify({'session': record.to_dict()}), 201
+
+    @app.route('/api/feedback/sessions/<int:session_id>/messages', methods=['GET', 'POST'])
+    @login_required
+    def feedback_session_messages(session_id):
+        session_record = _feedback_session_for_user(session_id)
+        if session_record is None:
+            return jsonify({'error': 'Conversation not found'}), 404
+        if request.method == 'GET':
+            messages = (
+                FeedbackMessage.query
+                .filter_by(session_id=session_record.id)
+                .order_by(FeedbackMessage.created_at.asc(), FeedbackMessage.id.asc())
+                .limit(300)
+                .all()
+            )
+            return jsonify({
+                'session': session_record.to_dict(),
+                'messages': [item.to_dict() for item in messages],
+                'issues': [item.to_dict() for item in session_record.issues],
+            })
+
+        payload = request.json or {}
+        content = str(payload.get('content') or '').strip()
+        if not content:
+            return jsonify({'error': '请输入内容'}), 400
+        if len(content) > 12000:
+            return jsonify({'error': '单条消息不能超过 12000 字符'}), 400
+        reasoning_level = str(payload.get('reasoning_level') or 'medium').strip()
+        if reasoning_level not in {'medium', 'high'}:
+            return jsonify({'error': 'Invalid reasoning level'}), 400
+        category_hint = str(payload.get('category_hint') or '').strip()
+        if category_hint not in {'', 'usage_help', 'bug', 'feature_request', 'data_issue', 'ai_experience', 'other'}:
+            category_hint = ''
+        page_context = safe_page_context(payload.get('page_context'))
+        now = datetime.utcnow()
+        recent_message_count = (
+            FeedbackMessage.query
+            .join(FeedbackSession, FeedbackSession.id == FeedbackMessage.session_id)
+            .filter(
+                FeedbackSession.user_id == current_user.id,
+                FeedbackMessage.role == 'user',
+                FeedbackMessage.created_at >= now - timedelta(minutes=1),
+            )
+            .count()
+        )
+        if recent_message_count >= 8:
+            return jsonify({'error': '发送过于频繁，请稍后再试'}), 429
+        raw_attachment_ids = payload.get('attachment_ids') or []
+        if not isinstance(raw_attachment_ids, list) or len(raw_attachment_ids) > 4:
+            return jsonify({'error': '每条消息最多携带 4 张截图'}), 400
+        try:
+            attachment_ids = list(dict.fromkeys(int(item) for item in raw_attachment_ids))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid attachment'}), 400
+        attachments = []
+        if attachment_ids:
+            attachments = (
+                FeedbackAttachment.query
+                .filter(
+                    FeedbackAttachment.id.in_(attachment_ids),
+                    FeedbackAttachment.session_id == session_record.id,
+                    FeedbackAttachment.uploader_id == current_user.id,
+                    FeedbackAttachment.message_id.is_(None),
+                )
+                .order_by(FeedbackAttachment.id.asc())
+                .all()
+            )
+            if len(attachments) != len(attachment_ids):
+                return jsonify({'error': '截图不存在或已发送'}), 400
+        user_message = FeedbackMessage(
+            session_id=session_record.id,
+            author_id=current_user.id,
+            role='user',
+            content=content,
+            reasoning_level=reasoning_level,
+            page_context=page_context,
+            created_at=now,
+        )
+        db.session.add(user_message)
+        db.session.flush()
+        for attachment in attachments:
+            attachment.message_id = user_message.id
+        if session_record.title == '新对话':
+            session_record.title = derive_session_title(content)
+        session_record.context_json = page_context or session_record.context_json
+        session_record.last_message_at = now
+        session_record.updated_at = now
+        db.session.commit()
+
+        history = (
+            FeedbackMessage.query
+            .filter_by(session_id=session_record.id)
+            .order_by(FeedbackMessage.created_at.desc(), FeedbackMessage.id.desc())
+            .limit(80)
+            .all()
+        )
+        history.reverse()
+        ai_available = True
+        agent_result = None
+        try:
+            agent_result = _run_feedback_agent(
+                [item.to_dict() for item in history],
+                page_context,
+                category_hint,
+                reasoning_level,
+                attachments,
+            )
+            assistant_content = agent_result['reply']
+        except Exception as exc:
+            current_app.logger.warning('Feedback assistant call failed: %s', exc)
+            ai_available = False
+            assistant_content = 'AI 专家暂时不可用。你的消息已经保存在当前对话中，管理员仍可在反馈面板查看。'
+
+        assistant_message = FeedbackMessage(
+            session_id=session_record.id,
+            author_id=None,
+            role='assistant',
+            content=assistant_content,
+            reasoning_level=reasoning_level,
+            page_context=page_context,
+            model_name=agent_result.get('model_name') if agent_result else None,
+            latency_ms=agent_result.get('latency_ms') if agent_result else None,
+            created_at=datetime.utcnow(),
+        )
+        db.session.add(assistant_message)
+        db.session.flush()
+        issue = None
+        if (
+            agent_result
+            and agent_result.get('ready_for_ticket')
+            and agent_result.get('ticket')
+            and agent_result['ticket'].get('category') != 'usage_help'
+        ):
+            issue = _upsert_feedback_issue(session_record, assistant_message, agent_result['ticket'])
+        session_record.last_message_at = assistant_message.created_at
+        session_record.updated_at = assistant_message.created_at
+        db.session.commit()
+        return jsonify({
+            'session': session_record.to_dict(),
+            'user_message': user_message.to_dict(),
+            'assistant_message': assistant_message.to_dict(),
+            'issue': issue.to_dict() if issue else None,
+            'intent': agent_result.get('intent') if agent_result else category_hint or 'other',
+            'ai_available': ai_available,
+        })
+
+    @app.route('/api/feedback/sessions/<int:session_id>/attachments', methods=['POST'])
+    @login_required
+    def upload_feedback_attachment(session_id):
+        session_record = _feedback_session_for_user(session_id)
+        if session_record is None:
+            return jsonify({'error': 'Conversation not found'}), 404
+        upload = request.files.get('file')
+        if upload is None:
+            return jsonify({'error': '请选择截图'}), 400
+        pending_count = FeedbackAttachment.query.filter_by(
+            session_id=session_record.id,
+            uploader_id=current_user.id,
+            message_id=None,
+        ).count()
+        if pending_count >= 4:
+            return jsonify({'error': '请先发送或删除当前截图'}), 400
+        try:
+            attachment = _store_feedback_attachment(upload, session_record)
+            db.session.commit()
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 400
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('Failed to store feedback screenshot')
+            return jsonify({'error': '保存截图失败'}), 500
+        return jsonify({'attachment': attachment.to_dict()}), 201
+
+    @app.route('/api/feedback/attachments/<int:attachment_id>', methods=['GET', 'DELETE'])
+    @login_required
+    def feedback_attachment_file(attachment_id):
+        attachment = FeedbackAttachment.query.get(attachment_id)
+        if attachment is None:
+            return jsonify({'error': 'Screenshot not found'}), 404
+        is_owner = int(attachment.uploader_id) == int(current_user.id)
+        if not is_owner and not getattr(current_user, 'is_admin', False):
+            return jsonify({'error': 'Screenshot not found'}), 404
+        storage_path = Path(attachment.storage_path)
+        if request.method == 'GET':
+            if not storage_path.is_file():
+                return jsonify({'error': 'Screenshot file not found'}), 404
+            return send_file(
+                storage_path,
+                mimetype=attachment.mime_type,
+                download_name=attachment.original_name,
+                conditional=True,
+                max_age=0,
+            )
+        if not is_owner or attachment.message_id is not None:
+            return jsonify({'error': '已发送的截图不能删除'}), 409
+        try:
+            storage_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        db.session.delete(attachment)
+        db.session.commit()
+        return jsonify({'status': 'deleted'})
+
+    @app.route('/api/feedback/messages/<int:message_id>/rating', methods=['POST'])
+    @login_required
+    def rate_feedback_message(message_id):
+        message_record = FeedbackMessage.query.get(message_id)
+        if message_record is None or message_record.role != 'assistant':
+            return jsonify({'error': 'Message not found'}), 404
+        session_record = _feedback_session_for_user(message_record.session_id)
+        if session_record is None:
+            return jsonify({'error': 'Message not found'}), 404
+        rating = str((request.json or {}).get('rating') or '').strip()
+        if rating not in {'helpful', 'unhelpful'}:
+            return jsonify({'error': 'Invalid rating'}), 400
+        message_record.rating = rating
+        issue = None
+        if rating == 'unhelpful':
+            issue = FeedbackIssue.query.filter_by(
+                source_message_id=message_record.id,
+                category='ai_experience',
+            ).first()
+            if issue is None:
+                issue = FeedbackIssue(
+                    session_id=session_record.id,
+                    reporter_id=session_record.user_id,
+                    source_message_id=message_record.id,
+                    category='ai_experience',
+                    title='工作站专家回答未解决医生问题',
+                    summary='用户将本条 AI 回答标记为未解决，需结合上下文检查回答准确性和追问策略。',
+                    page=str((message_record.page_context or {}).get('module_label') or (message_record.page_context or {}).get('module') or '')[:120],
+                    impact='医生未能通过本条回答完成当前任务。',
+                    severity='medium',
+                    status='open',
+                    acceptance_criteria='复核对话上下文，给出准确操作路径或补充一个关键追问。',
+                    change_scope='needs_review',
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                db.session.add(issue)
+        db.session.commit()
+        return jsonify({
+            'message': message_record.to_dict(),
+            'issue': issue.to_dict() if issue else None,
+        })
+
+    @app.route('/api/admin/feedback/overview', methods=['GET'])
+    @require_feedback_dashboard_viewer
+    def admin_feedback_overview():
+        total_sessions = FeedbackSession.query.count()
+        total_messages = FeedbackMessage.query.count()
+        total_issues = FeedbackIssue.query.count()
+        open_issues = FeedbackIssue.query.filter(FeedbackIssue.status.notin_(['fixed', 'closed'])).count()
+        category_rows = (
+            db.session.query(FeedbackIssue.category, db.func.count(FeedbackIssue.id))
+            .group_by(FeedbackIssue.category)
+            .all()
+        )
+        status_rows = (
+            db.session.query(FeedbackIssue.status, db.func.count(FeedbackIssue.id))
+            .group_by(FeedbackIssue.status)
+            .all()
+        )
+        user_rows = (
+            db.session.query(User.id, User.username, db.func.count(FeedbackSession.id))
+            .outerjoin(FeedbackSession, FeedbackSession.user_id == User.id)
+            .filter(User.is_approved.is_(True))
+            .group_by(User.id, User.username)
+            .order_by(User.username.asc())
+            .all()
+        )
+        since = datetime.utcnow() - timedelta(days=13)
+        recent_sessions = FeedbackSession.query.filter(FeedbackSession.created_at >= since).all()
+        daily = {
+            (since + timedelta(days=offset)).strftime('%Y-%m-%d'): 0
+            for offset in range(14)
+        }
+        for record in recent_sessions:
+            key = record.created_at.strftime('%Y-%m-%d')
+            daily[key] = daily.get(key, 0) + 1
+        return jsonify({
+            'summary': {
+                'sessions': total_sessions,
+                'messages': total_messages,
+                'issues': total_issues,
+                'open_issues': open_issues,
+            },
+            'categories': {str(key or 'other'): count for key, count in category_rows},
+            'statuses': {str(key or 'open'): count for key, count in status_rows},
+            'daily_sessions': [{'date': key, 'count': daily[key]} for key in sorted(daily)],
+            'users': [
+                {'id': user_id, 'username': username, 'session_count': session_count}
+                for user_id, username, session_count in user_rows
+            ],
+        })
+
+    @app.route('/api/admin/feedback/issues', methods=['GET'])
+    @require_feedback_dashboard_viewer
+    def admin_feedback_issues():
+        query = FeedbackIssue.query
+        user_id = request.args.get('user_id', type=int)
+        category = str(request.args.get('category') or '').strip()
+        status = str(request.args.get('status') or '').strip()
+        keyword = str(request.args.get('search') or '').strip()
+        start = _parse_feedback_datetime(request.args.get('start'))
+        end_raw = str(request.args.get('end') or '').strip()
+        end = _parse_feedback_datetime(end_raw)
+        if user_id:
+            query = query.filter(FeedbackIssue.reporter_id == user_id)
+        if category:
+            query = query.filter(FeedbackIssue.category == category)
+        if status:
+            query = query.filter(FeedbackIssue.status == status)
+        if keyword:
+            like = f'%{keyword}%'
+            query = query.filter(db.or_(FeedbackIssue.title.ilike(like), FeedbackIssue.summary.ilike(like)))
+        if start:
+            query = query.filter(FeedbackIssue.created_at >= start)
+        if end:
+            if len(end_raw) == 10:
+                query = query.filter(FeedbackIssue.created_at < end + timedelta(days=1))
+            else:
+                query = query.filter(FeedbackIssue.created_at <= end)
+        limit = min(max(request.args.get('limit', default=200, type=int), 1), 500)
+        records = query.order_by(FeedbackIssue.updated_at.desc()).limit(limit).all()
+        return jsonify({'issues': [item.to_dict(include_user=True) for item in records]})
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>', methods=['PATCH'])
+    @require_feedback_operator
+    def admin_update_feedback_issue(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        if issue is None:
+            return jsonify({'error': 'Issue not found'}), 404
+        existing_plan = FeedbackWorkPlan.query.filter_by(issue_id=issue.id).first()
+        if existing_plan and existing_plan.status in {'queued', 'verified'}:
+            return jsonify({'error': '执行中的问题单不能直接修改，请先新建后续问题'}), 409
+        payload = request.json or {}
+        text_fields = {
+            'title': 200,
+            'summary': 12000,
+            'page': 120,
+            'operation': 12000,
+            'expected_behavior': 12000,
+            'actual_behavior': 12000,
+            'impact': 12000,
+            'acceptance_criteria': 12000,
+        }
+        for field, limit in text_fields.items():
+            if field in payload:
+                value = str(payload.get(field) or '').strip()
+                if field == 'title' and not value:
+                    return jsonify({'error': '问题标题不能为空'}), 400
+                setattr(issue, field, value[:limit])
+        if 'status' in payload:
+            if not getattr(current_user, 'is_admin', False):
+                return jsonify({'error': 'Only administrators can directly change issue status'}), 403
+            status = str(payload.get('status') or '')
+            if status not in {'open', 'reviewing', 'planned', 'fixed', 'closed'}:
+                return jsonify({'error': 'Invalid status'}), 400
+            issue.status = status
+        if 'severity' in payload:
+            severity = str(payload.get('severity') or '')
+            if severity not in {'low', 'medium', 'high', 'critical'}:
+                return jsonify({'error': 'Invalid severity'}), 400
+            issue.severity = severity
+        if 'admin_note' in payload:
+            if not getattr(current_user, 'is_admin', False):
+                return jsonify({'error': 'Only administrators can edit internal notes'}), 403
+            issue.admin_note = str(payload.get('admin_note') or '')[:12000]
+        if existing_plan and existing_plan.status == 'approved':
+            existing_plan.status = 'draft'
+            existing_plan.approved_by_id = None
+            existing_plan.approved_at = None
+            existing_plan.updated_at = datetime.utcnow()
+        issue.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'issue': issue.to_dict(include_user=True)})
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan', methods=['GET'])
+    @require_feedback_dashboard_viewer
+    def get_feedback_work_plan(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        if issue is None:
+            return jsonify({'error': 'Issue not found'}), 404
+        plan = FeedbackWorkPlan.query.filter_by(issue_id=issue.id).first()
+        return jsonify({'work_plan': plan.to_dict() if plan else None})
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/generate', methods=['POST'])
+    @require_feedback_operator
+    def generate_feedback_work_plan(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        if issue is None:
+            return jsonify({'error': 'Issue not found'}), 404
+        existing = FeedbackWorkPlan.query.filter_by(issue_id=issue.id).first()
+        if existing and existing.status in {'queued', 'verified'}:
+            return jsonify({'error': '执行队列中的方案不能直接覆盖'}), 409
+        revision_note = str((request.json or {}).get('revision_note') or '').strip()[:4000]
+        try:
+            proposal = _generate_feedback_work_plan(issue, revision_note)
+        except Exception as exc:
+            current_app.logger.warning('Feedback work plan generation failed: %s', exc)
+            return jsonify({'error': '方案生成暂不可用，请稍后重试'}), 503
+        if existing is None:
+            existing = FeedbackWorkPlan(issue_id=issue.id, created_at=datetime.utcnow())
+            db.session.add(existing)
+        existing.proposal_json = proposal
+        existing.status = 'draft'
+        existing.generated_by_id = current_user.id
+        existing.approved_by_id = None
+        existing.approved_at = None
+        existing.queue_note = ''
+        existing.updated_at = datetime.utcnow()
+        issue.status = 'reviewing'
+        issue.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'work_plan': existing.to_dict(), 'issue': issue.to_dict(include_user=True)})
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan', methods=['PATCH'])
+    @require_feedback_operator
+    def update_feedback_work_plan(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        plan = FeedbackWorkPlan.query.filter_by(issue_id=issue_id).first()
+        if issue is None or plan is None:
+            return jsonify({'error': 'Work plan not found'}), 404
+        if plan.status != 'draft':
+            return jsonify({'error': '请先重新生成或撤回到草案状态后再编辑'}), 409
+        proposal = (request.json or {}).get('proposal')
+        if not isinstance(proposal, dict):
+            return jsonify({'error': 'Invalid proposal'}), 400
+        plan.proposal_json = _normalize_feedback_work_plan(json.dumps(proposal, ensure_ascii=False), issue)
+        plan.generated_by_id = current_user.id
+        plan.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'work_plan': plan.to_dict()})
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/approve', methods=['POST'])
+    @require_feedback_operator
+    def approve_feedback_work_plan(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        plan = FeedbackWorkPlan.query.filter_by(issue_id=issue_id).first()
+        if issue is None or plan is None:
+            return jsonify({'error': 'Work plan not found'}), 404
+        if plan.status not in {'draft', 'approved'}:
+            return jsonify({'error': '当前方案不能批准'}), 409
+        plan.status = 'approved'
+        plan.approved_by_id = current_user.id
+        plan.approved_at = datetime.utcnow()
+        plan.updated_at = datetime.utcnow()
+        issue.status = 'planned'
+        issue.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'work_plan': plan.to_dict(), 'issue': issue.to_dict(include_user=True)})
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/queue', methods=['POST'])
+    @require_feedback_operator
+    def queue_feedback_work_plan(issue_id):
+        plan = FeedbackWorkPlan.query.filter_by(issue_id=issue_id).first()
+        if plan is None:
+            return jsonify({'error': 'Work plan not found'}), 404
+        if plan.status != 'approved':
+            return jsonify({'error': '请先批准方案'}), 409
+        payload = request.json or {}
+        plan.status = 'queued'
+        plan.queue_note = str(payload.get('queue_note') or '已批准，等待受控 Codex 执行器接入。')[:4000]
+        plan.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'work_plan': plan.to_dict()})
+
+    @app.route('/api/admin/feedback/sessions', methods=['GET'])
+    @require_feedback_dashboard_viewer
+    def admin_feedback_sessions():
+        query = FeedbackSession.query
+        user_id = request.args.get('user_id', type=int)
+        start = _parse_feedback_datetime(request.args.get('start'))
+        end_raw = str(request.args.get('end') or '').strip()
+        end = _parse_feedback_datetime(end_raw)
+        if user_id:
+            query = query.filter(FeedbackSession.user_id == user_id)
+        if start:
+            query = query.filter(FeedbackSession.created_at >= start)
+        if end:
+            if len(end_raw) == 10:
+                query = query.filter(FeedbackSession.created_at < end + timedelta(days=1))
+            else:
+                query = query.filter(FeedbackSession.created_at <= end)
+        limit = min(max(request.args.get('limit', default=200, type=int), 1), 500)
+        records = query.order_by(FeedbackSession.last_message_at.desc()).limit(limit).all()
+        return jsonify({'sessions': [item.to_dict(include_user=True) for item in records]})
+
+    @app.route('/api/admin/feedback/sessions/<int:session_id>/messages', methods=['GET'])
+    @require_feedback_dashboard_viewer
+    def admin_feedback_session_messages(session_id):
+        session_record = FeedbackSession.query.get(session_id)
+        if session_record is None:
+            return jsonify({'error': 'Conversation not found'}), 404
+        records = (
+            FeedbackMessage.query
+            .filter_by(session_id=session_record.id)
+            .order_by(FeedbackMessage.created_at.asc(), FeedbackMessage.id.asc())
+            .limit(500)
+            .all()
+        )
+        return jsonify({
+            'session': session_record.to_dict(include_user=True),
+            'messages': [item.to_dict(include_debug=True) for item in records],
+            'issues': [item.to_dict(include_user=True) for item in session_record.issues],
+        })
 
     @app.route('/api/admin/users', methods=['GET'])
     @require_admin
@@ -4207,6 +5242,63 @@ def register_routes(app):
     @require_admin
     def list_assignment_presets():
         return jsonify({'presets': _assignment_case_library_presets()})
+
+
+    @app.route('/api/admin/assignment-library-cases', methods=['GET'])
+    @require_admin
+    def list_assignment_library_cases():
+        preset_id = str(request.args.get('preset_id') or '').strip()
+        preset = _assignment_preset_by_id(preset_id)
+        if preset is None:
+            return jsonify({'error': '病例库不存在'}), 404
+        search = str(request.args.get('search') or '').strip().casefold()
+        try:
+            page = max(1, int(request.args.get('page') or 1))
+            page_size = min(max(10, int(request.args.get('page_size') or 50)), 200)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid pagination'}), 400
+        details = _assignment_details_for_preset(preset)
+        if search:
+            details = [
+                item for item in details
+                if any(search in alias for alias in _assignment_case_aliases(item))
+            ]
+        total = len(details)
+        start = (page - 1) * page_size
+        return jsonify({
+            'preset': preset,
+            'items': details[start:start + page_size],
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+        })
+
+
+    @app.route('/api/admin/assignment-selection/resolve', methods=['POST'])
+    @require_admin
+    def resolve_assignment_selection():
+        payload = request.json or {}
+        preset_id = str(payload.get('preset_id') or '').strip()
+        preset = _assignment_preset_by_id(preset_id)
+        if preset is None:
+            return jsonify({'error': '病例库不存在'}), 404
+        selection_mode = str(payload.get('selection_mode') or 'order').strip()
+        selection = payload.get('selection')
+        try:
+            case_ids, case_details, warnings = _resolve_assignment_preset_selection(
+                preset,
+                selection,
+                selection_mode,
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        return jsonify({
+            'preset': preset,
+            'case_ids': case_ids,
+            'case_details': case_details,
+            'selected_count': len(case_ids),
+            'warnings': warnings,
+        })
 
 
     @app.route('/api/admin/assignment-presets/km-report100/add-cases', methods=['POST'])

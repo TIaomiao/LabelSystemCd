@@ -12,8 +12,8 @@ from .config import DEFAULT_SAMPLE_PATH, ensure_runtime_dirs
 from .db import init_db, loads
 from .models import ContourSet, DirectoryListing, ImportStudyRequest, InferJobRequest, JobStatus, MeasurementRequest, ModelFrameSegmentationRequest, NeighborPropagationRequest, PhaseDetectionResult, PromptSegmentationRequest, ReportDraft, ReportUpdateRequest, RoleUpdateRequest, StudyDetail
 from .services.dicom_indexer import fetch_study_detail, get_frame_row, get_series_row, import_study, list_directories, list_frame_rows, read_frame_pixels, repair_series_roles, update_series_role
-from .services.inference import create_job, fetch_contours, fetch_job, pause_job, run_job, save_contours
-from .services.measurements import ensure_render, export_pdf, measurement_to_csv, recompute_function, recompute_lge
+from .services.inference import create_job, fetch_contours, fetch_job, fetch_study_annotation_summaries, pause_job, run_job, save_contours
+from .services.measurements import compute_lv_tracking_preview, ensure_render, export_pdf, measurement_to_csv, recompute_function, recompute_lge
 from .services.model_frame_segmentation import apply_model_frame_segmentation
 from .services.gpu_monitor import get_gpu_status, gpu_monitor
 from .services.phase_detection import detect_function_phases
@@ -47,7 +47,7 @@ def shutdown() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "default_sample_path": str(DEFAULT_SAMPLE_PATH)}
+    return {"status": "ok"}
 
 
 def _request_actor(request: Request) -> dict | None:
@@ -92,6 +92,17 @@ def import_study_endpoint(payload: ImportStudyRequest) -> dict:
         raise HTTPException(status_code=404, detail="Selected folder does not exist.")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/studies/annotation-summaries")
+def get_study_annotation_summaries(study_ids: str = Query(...)) -> dict:
+    try:
+        parsed_ids = [int(value) for value in study_ids.split(",") if value.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="study_ids must be comma-separated integers.")
+    if len(parsed_ids) > 1000:
+        raise HTTPException(status_code=400, detail="Too many study_ids.")
+    return {"items": fetch_study_annotation_summaries(parsed_ids)}
 
 
 @app.get("/studies/{study_id}", response_model=StudyDetail)
@@ -144,7 +155,10 @@ def get_contours(series_id: int, module: str = Query(..., pattern="^(function|lg
 
 @app.put("/contours/{series_id}", response_model=ContourSet)
 def put_contours(series_id: int, payload: ContourSet, request: Request) -> dict:
-    return save_contours(series_id, payload.module, payload.model_dump(), actor=_request_actor(request), action_origin="manual")
+    try:
+        return save_contours(series_id, payload.module, payload.model_dump(), actor=_request_actor(request), action_origin="manual")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/series/{series_id}/prompt-segment", response_model=ContourSet)
@@ -217,6 +231,8 @@ def propagate_neighbor_endpoint(series_id: int, payload: NeighborPropagationRequ
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Series not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except PropagationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -225,6 +241,14 @@ def propagate_neighbor_endpoint(series_id: int, payload: NeighborPropagationRequ
 def recompute_function_endpoint(payload: MeasurementRequest) -> dict:
     try:
         return recompute_function(payload.series_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Series not found.")
+
+
+@app.post("/measurements/tracking-preview")
+def tracking_preview_endpoint(payload: MeasurementRequest) -> dict:
+    try:
+        return compute_lv_tracking_preview(payload.series_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Series not found.")
 

@@ -16,6 +16,8 @@ from skimage.draw import polygon2mask
 from skimage.feature import graycomatrix, graycoprops
 from skimage.measure import find_contours, label, regionprops
 from skimage.morphology import binary_closing, binary_opening, disk, remove_small_objects
+from skimage.registration import optical_flow_tvl1, phase_cross_correlation
+from skimage.transform import warp
 
 from ..config import EXPORT_DIR, RENDER_DIR
 from ..db import dumps, get_conn, loads, utcnow
@@ -38,19 +40,59 @@ def _polygon_to_mask(contour: dict | None, rows: int, cols: int) -> np.ndarray:
     return polygon2mask((rows, cols), polygon)
 
 
+def _exclude_to_mask(frame_payload: dict, rows: int, cols: int) -> np.ndarray:
+    raw_regions = frame_payload.get("exclude_regions") if isinstance(frame_payload, dict) else None
+    if isinstance(raw_regions, list):
+        mask = np.zeros((rows, cols), dtype=bool)
+        for contour in raw_regions:
+            mask |= _polygon_to_mask(contour, rows, cols)
+        return mask
+    return _polygon_to_mask(frame_payload.get("exclude"), rows, cols)
+
+
 def _frame_masks(frame_payload: dict, rows: int, cols: int) -> dict[str, np.ndarray]:
     return {
         "la": _polygon_to_mask(frame_payload.get("la"), rows, cols),
         "ra": _polygon_to_mask(frame_payload.get("ra"), rows, cols),
         "endo": _polygon_to_mask(frame_payload.get("endo"), rows, cols),
         "epi": _polygon_to_mask(frame_payload.get("epi"), rows, cols),
+        "ventricular_epi": _polygon_to_mask(frame_payload.get("ventricular_epi"), rows, cols),
         "rv": _polygon_to_mask(frame_payload.get("rv"), rows, cols),
         "fat": _polygon_to_mask(frame_payload.get("fat"), rows, cols),
+        "fat_outer": _polygon_to_mask(frame_payload.get("fat_outer"), rows, cols),
         "remote": _polygon_to_mask(frame_payload.get("remote"), rows, cols),
         "enhanced": _polygon_to_mask(frame_payload.get("enhanced"), rows, cols),
-        "exclude": _polygon_to_mask(frame_payload.get("exclude"), rows, cols),
+        "exclude": _exclude_to_mask(frame_payload, rows, cols),
         "mvo": _polygon_to_mask(frame_payload.get("mvo"), rows, cols),
     }
+
+
+def _function_fat_masks(masks: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray, str, list[str]]:
+    exclude = masks["exclude"]
+    if int(masks["fat_outer"].sum()) > 0:
+        inner_key = ""
+        method = ""
+        if int(masks["ventricular_epi"].sum()) > 0:
+            inner_key = "ventricular_epi"
+            method = "fat_outer_minus_ventricular_epi"
+        elif int(masks["epi"].sum()) > 0:
+            inner_key = "epi"
+            method = "fat_outer_minus_epi"
+
+        if inner_key:
+            raw_fat = masks["fat_outer"] & ~masks[inner_key]
+            exclude_mask = raw_fat & exclude
+            source_keys = ["fat_outer", inner_key]
+            if int(exclude_mask.sum()) > 0:
+                source_keys.append("exclude")
+            return raw_fat & ~exclude_mask, exclude_mask, method, source_keys
+
+    raw_fat = masks["fat"]
+    exclude_mask = raw_fat & exclude
+    source_keys = ["fat"]
+    if int(exclude_mask.sum()) > 0:
+        source_keys.append("exclude")
+    return raw_fat & ~exclude_mask, exclude_mask, "legacy_fat_roi", source_keys
 
 
 def _mask_to_polygon(mask: np.ndarray) -> dict | None:
@@ -118,6 +160,18 @@ def _round_float(value: float | None, digits: int = 4) -> float | None:
     if value is None:
         return None
     return round(float(value), digits)
+
+
+def _row_value(row, key: str, default=None):
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        getter = getattr(row, "get", None)
+        if callable(getter):
+            value = getter(key, default)
+        else:
+            value = default
+    return default if value is None else value
 
 
 def _histogram_entropy(values: np.ndarray, bins: int = 64) -> float | None:
@@ -215,6 +269,473 @@ def _shape_statistics(mask: np.ndarray, pixel_area: float, spacing_y: float, spa
         "major_axis_length_mm": _round_float(float(largest.major_axis_length) * spacing_mean, 4),
         "minor_axis_length_mm": _round_float(float(largest.minor_axis_length) * spacing_mean, 4),
         "bbox_area_mm2": _round_float(bbox_area_mm2, 4),
+    }
+
+
+def _largest_mask_major_axis_mm(mask: np.ndarray, spacing_y: float, spacing_x: float) -> float | None:
+    if int(mask.sum()) <= 0:
+        return None
+    labels = label(mask.astype(np.uint8), connectivity=1)
+    props = regionprops(labels)
+    if not props:
+        return None
+    largest = max(props, key=lambda prop: prop.area)
+    spacing_mean = (float(spacing_x) + float(spacing_y)) / 2.0
+    return float(largest.major_axis_length) * spacing_mean
+
+
+def _phase_lv_geometry(
+    selected_frame_data: dict[tuple[int, int], tuple[np.ndarray, dict[str, np.ndarray]]],
+    phase_index: int,
+    *,
+    pixel_area: float,
+    spacing_y: float,
+    spacing_x: float,
+) -> dict[str, float | int | None]:
+    endo_area_mm2 = 0.0
+    epi_area_mm2 = 0.0
+    endo_perimeter_mm = 0.0
+    long_axis_values: list[float] = []
+    endo_frame_count = 0
+    epi_frame_count = 0
+
+    for (_slice_index, current_phase), (_image, masks) in selected_frame_data.items():
+        if current_phase != phase_index:
+            continue
+        endo = masks.get("endo")
+        if endo is not None and int(endo.sum()) > 0:
+            endo_frame_count += 1
+            endo_area_mm2 += float(endo.sum()) * pixel_area
+            perimeter = _mask_perimeter_mm(endo, spacing_y, spacing_x)
+            if perimeter:
+                endo_perimeter_mm += float(perimeter)
+            long_axis = _largest_mask_major_axis_mm(endo, spacing_y, spacing_x)
+            if long_axis:
+                long_axis_values.append(float(long_axis))
+
+        epi = masks.get("epi")
+        if epi is not None and int(epi.sum()) > 0:
+            epi_frame_count += 1
+            epi_area_mm2 += float(epi.sum()) * pixel_area
+
+    wall_area_mm2 = max(epi_area_mm2 - endo_area_mm2, 0.0) if epi_frame_count and endo_frame_count else None
+    wall_thickness_proxy_mm = (wall_area_mm2 / endo_perimeter_mm) if wall_area_mm2 is not None and endo_perimeter_mm > 1e-6 else None
+
+    return {
+        "endo_frame_count": endo_frame_count,
+        "epi_frame_count": epi_frame_count,
+        "endo_area_mm2": _round_float(endo_area_mm2, 4) if endo_frame_count else None,
+        "epi_area_mm2": _round_float(epi_area_mm2, 4) if epi_frame_count else None,
+        "endo_perimeter_mm": _round_float(endo_perimeter_mm, 4) if endo_perimeter_mm > 1e-6 else None,
+        "wall_thickness_proxy_mm": _round_float(wall_thickness_proxy_mm, 4),
+        "long_axis_proxy_mm": _round_float(max(long_axis_values), 4) if long_axis_values else None,
+    }
+
+
+def _strain_percent(value: float | None, reference: float | None) -> float | None:
+    if value is None or reference is None or abs(reference) <= 1e-6:
+        return None
+    return ((float(value) - float(reference)) / float(reference)) * 100.0
+
+
+def _metric_at_phase(curve: list[dict], phase_index: int, key: str) -> float | None:
+    for item in curve:
+        if item.get("phase_index") == phase_index:
+            value = item.get(key)
+            return float(value) if isinstance(value, (int, float)) else None
+    return None
+
+
+def _compute_lv_2d_strain_proxy(
+    selected_frame_data: dict[tuple[int, int], tuple[np.ndarray, dict[str, np.ndarray]]],
+    phase_indices: list[int],
+    *,
+    role: str,
+    ed_phase: int,
+    es_phase: int,
+    pixel_area: float,
+    spacing_y: float,
+    spacing_x: float,
+    phase_times_ms: dict[int, float | None] | None = None,
+) -> dict:
+    geometries = {
+        phase: _phase_lv_geometry(
+            selected_frame_data,
+            phase,
+            pixel_area=pixel_area,
+            spacing_y=spacing_y,
+            spacing_x=spacing_x,
+        )
+        for phase in phase_indices
+    }
+    ed_geometry = geometries.get(ed_phase, {})
+    role = str(role or "unknown")
+    compute_sax = role in {"cine_sax", "unknown"}
+    compute_lax = role in {"cine_lax_4ch", "cine_lax_2ch", "cine_lax_3ch", "unknown"}
+    ed_perimeter = ed_geometry.get("endo_perimeter_mm") if compute_sax else None
+    ed_thickness = ed_geometry.get("wall_thickness_proxy_mm") if compute_sax else None
+    ed_long_axis = ed_geometry.get("long_axis_proxy_mm") if compute_lax else None
+
+    curve = []
+    usable_phase_count = 0
+    for phase in phase_indices:
+        geometry = geometries.get(phase, {})
+        gcs = _strain_percent(geometry.get("endo_perimeter_mm"), ed_perimeter)
+        grs = _strain_percent(geometry.get("wall_thickness_proxy_mm"), ed_thickness)
+        gls = _strain_percent(geometry.get("long_axis_proxy_mm"), ed_long_axis)
+        if any(value is not None for value in (gcs, grs, gls)):
+            usable_phase_count += 1
+        curve.append(
+            {
+                "phase_index": phase,
+                "time_ms": _round_float((phase_times_ms or {}).get(phase), 4),
+                "gcs_proxy_percent": _round_float(gcs, 4),
+                "grs_proxy_percent": _round_float(grs, 4),
+                "gls_proxy_percent": _round_float(gls, 4),
+                "geometry": geometry,
+            }
+        )
+
+    def values_for(key: str) -> list[float]:
+        values: list[float] = []
+        for item in curve:
+            value = item.get(key)
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+        return values
+
+    gcs_values = values_for("gcs_proxy_percent")
+    grs_values = values_for("grs_proxy_percent")
+    gls_values = values_for("gls_proxy_percent")
+    summary = {
+        "gcs_peak_percent": _round_float(min(gcs_values), 4) if gcs_values else None,
+        "gcs_es_percent": _round_float(_metric_at_phase(curve, es_phase, "gcs_proxy_percent"), 4),
+        "grs_peak_percent": _round_float(max(grs_values), 4) if grs_values else None,
+        "grs_es_percent": _round_float(_metric_at_phase(curve, es_phase, "grs_proxy_percent"), 4),
+        "gls_peak_percent": _round_float(min(gls_values), 4) if gls_values else None,
+        "gls_es_percent": _round_float(_metric_at_phase(curve, es_phase, "gls_proxy_percent"), 4),
+    }
+
+    missing: list[str] = []
+    if compute_sax and ed_perimeter is None:
+        missing.append("ed_endo_perimeter")
+    if compute_sax and ed_thickness is None:
+        missing.append("ed_epi_or_wall_thickness")
+    if compute_lax and ed_long_axis is None:
+        missing.append("ed_long_axis")
+    if len(phase_indices) < 2:
+        missing.append("multi_phase")
+
+    quality = {
+        "usable_phase_count": usable_phase_count,
+        "total_phase_count": len(phase_indices),
+        "missing_reference": missing,
+        "clinical_grade": False,
+        "notes": [
+            "Experimental 2D geometry proxy based on manual contours.",
+            "Not feature-tracking or clinical-grade myocardial strain.",
+        ],
+    }
+    return {
+        "method": "experimental_2d_geometry_proxy",
+        "role": role,
+        "ed_phase": ed_phase,
+        "es_phase": es_phase,
+        "summary": summary,
+        "curve": curve,
+        "quality": quality,
+    }
+
+
+def _normalize_tracking_image(image: np.ndarray) -> np.ndarray:
+    normalized = image.astype(np.float32)
+    finite = normalized[np.isfinite(normalized)]
+    if finite.size <= 0:
+        return np.zeros_like(normalized, dtype=np.float32)
+    low, high = np.percentile(finite, [2, 98])
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        low = float(finite.min())
+        high = float(finite.max())
+    if high <= low:
+        return np.zeros_like(normalized, dtype=np.float32)
+    normalized = np.clip((normalized - low) / (high - low), 0.0, 1.0)
+    return normalized.astype(np.float32)
+
+
+def _shift_image_for_tracking(image: np.ndarray, row_shift: float, col_shift: float, *, order: int) -> np.ndarray:
+    rows, cols = image.shape[:2]
+    row_coords, col_coords = np.meshgrid(
+        np.arange(rows, dtype=np.float32),
+        np.arange(cols, dtype=np.float32),
+        indexing="ij",
+    )
+    sample_coords = np.array([row_coords - float(row_shift), col_coords - float(col_shift)])
+    return warp(image, sample_coords, order=order, preserve_range=True, mode="edge").astype(image.dtype, copy=False)
+
+
+def _prepare_tvl1_tracking(
+    source_image: np.ndarray,
+    target_image: np.ndarray,
+) -> dict | None:
+    reference = _normalize_tracking_image(target_image)
+    moving = _normalize_tracking_image(source_image)
+    phase_shift_row = 0.0
+    phase_shift_col = 0.0
+    if float(reference.max() - reference.min()) > 1e-6 and float(moving.max() - moving.min()) > 1e-6:
+        try:
+            shift, _, _ = phase_cross_correlation(reference, moving, upsample_factor=10)
+            if np.isfinite(shift[0]) and np.isfinite(shift[1]):
+                phase_shift_row = float(shift[0])
+                phase_shift_col = float(shift[1])
+                if abs(phase_shift_row) > 0.01 or abs(phase_shift_col) > 0.01:
+                    moving = _shift_image_for_tracking(moving, phase_shift_row, phase_shift_col, order=1)
+        except Exception:
+            pass
+
+    try:
+        flow = optical_flow_tvl1(reference, moving, attachment=10.0, tightness=0.25)
+    except Exception:
+        return None
+
+    row_coords, col_coords = np.meshgrid(
+        np.arange(reference.shape[0], dtype=np.float32),
+        np.arange(reference.shape[1], dtype=np.float32),
+        indexing="ij",
+    )
+    sample_coords = np.array([row_coords + flow[0], col_coords + flow[1]])
+    return {
+        "flow": flow,
+        "sample_coords": sample_coords,
+        "phase_shift_row_px": phase_shift_row,
+        "phase_shift_col_px": phase_shift_col,
+    }
+
+
+def _warp_mask_with_tracking_field(
+    source_mask: np.ndarray,
+    tracking_field: dict,
+) -> tuple[np.ndarray, dict[str, float | None]]:
+    phase_shift_row = float(tracking_field.get("phase_shift_row_px") or 0.0)
+    phase_shift_col = float(tracking_field.get("phase_shift_col_px") or 0.0)
+    if abs(phase_shift_row) > 0.01 or abs(phase_shift_col) > 0.01:
+        source_mask = _shift_image_for_tracking(
+            source_mask.astype(np.float32),
+            phase_shift_row,
+            phase_shift_col,
+            order=0,
+        ) >= 0.5
+
+    warped = warp(
+        source_mask.astype(np.float32),
+        tracking_field["sample_coords"],
+        order=0,
+        preserve_range=True,
+        mode="edge",
+    ) >= 0.5
+    warped = binary_closing(warped, disk(1))
+    warped = binary_opening(warped, disk(1))
+    warped = remove_small_objects(warped.astype(bool), 8)
+
+    flow = tracking_field["flow"]
+    flow_mag = np.sqrt(np.square(flow[0]) + np.square(flow[1]))
+    mask_for_flow = source_mask.astype(bool)
+    mean_flow = float(flow_mag[mask_for_flow].mean()) if int(mask_for_flow.sum()) > 0 else None
+    return warped.astype(bool), {
+        "phase_shift_row_px": _round_float(phase_shift_row, 4),
+        "phase_shift_col_px": _round_float(phase_shift_col, 4),
+        "mean_flow_px": _round_float(mean_flow, 4),
+    }
+
+
+def _warp_mask_with_tvl1(
+    source_mask: np.ndarray,
+    source_image: np.ndarray,
+    target_image: np.ndarray,
+) -> tuple[np.ndarray | None, dict[str, float | None]]:
+    """Compatibility wrapper for callers that track one mask at a time."""
+    tracking_field = _prepare_tvl1_tracking(source_image, target_image)
+    if tracking_field is None:
+        return None, {
+            "phase_shift_row_px": None,
+            "phase_shift_col_px": None,
+            "mean_flow_px": None,
+        }
+    return _warp_mask_with_tracking_field(source_mask, tracking_field)
+
+
+def _mask_dice(mask_a: np.ndarray, mask_b: np.ndarray) -> float | None:
+    area_a = int(mask_a.sum())
+    area_b = int(mask_b.sum())
+    if area_a <= 0 and area_b <= 0:
+        return None
+    denom = area_a + area_b
+    if denom <= 0:
+        return None
+    return (2.0 * float((mask_a & mask_b).sum())) / float(denom)
+
+
+def _mask_boundary_points(mask: np.ndarray) -> np.ndarray:
+    contours = find_contours(mask.astype(float), 0.5)
+    if not contours:
+        return np.empty((0, 2), dtype=np.float32)
+    contour = max(contours, key=len)
+    if len(contour) > 160:
+        indices = np.linspace(0, len(contour) - 1, num=160, dtype=int)
+        contour = contour[indices]
+    return np.asarray(contour, dtype=np.float32)
+
+
+def _mean_boundary_distance_mm(
+    predicted_mask: np.ndarray,
+    target_mask: np.ndarray,
+    *,
+    spacing_y: float,
+    spacing_x: float,
+) -> float | None:
+    predicted_points = _mask_boundary_points(predicted_mask)
+    target_points = _mask_boundary_points(target_mask)
+    if len(predicted_points) == 0 or len(target_points) == 0:
+        return None
+    scale = np.array([float(spacing_y), float(spacing_x)], dtype=np.float32)
+    predicted_mm = predicted_points * scale
+    target_mm = target_points * scale
+    distances = []
+    chunk_size = 64
+    for start in range(0, len(predicted_mm), chunk_size):
+        chunk = predicted_mm[start : start + chunk_size]
+        diff = chunk[:, None, :] - target_mm[None, :, :]
+        distances.append(np.sqrt(np.sum(np.square(diff), axis=2)).min(axis=1))
+    if not distances:
+        return None
+    return float(np.concatenate(distances).mean())
+
+
+def _compute_lv_tracking_validation(
+    selected_frame_data: dict[tuple[int, int], tuple[np.ndarray, dict[str, np.ndarray]]],
+    *,
+    role: str,
+    spacing_y: float,
+    spacing_x: float,
+    eligible_frame_keys: set[tuple[int, int]] | None = None,
+    max_pairs: int = 12,
+) -> dict:
+    contour_keys = ("endo", "epi", "myocardium")
+    candidate_pairs: list[tuple[int, int, int]] = []
+    available_keys = set(selected_frame_data)
+    if eligible_frame_keys is not None:
+        available_keys &= eligible_frame_keys
+
+    for slice_index in sorted({key[0] for key in available_keys}):
+        phase_items = sorted(phase for current_slice, phase in available_keys if current_slice == slice_index)
+        for source_phase, target_phase in zip(phase_items, phase_items[1:]):
+            if target_phase != source_phase + 1:
+                continue
+            source_masks = selected_frame_data[(slice_index, source_phase)][1]
+            target_masks = selected_frame_data[(slice_index, target_phase)][1]
+            if not any(
+                source_masks.get(key) is not None
+                and target_masks.get(key) is not None
+                and int(source_masks[key].sum()) > 0
+                and int(target_masks[key].sum()) > 0
+                for key in contour_keys
+            ):
+                continue
+            candidate_pairs.append((slice_index, source_phase, target_phase))
+
+    candidate_pair_count = len(candidate_pairs)
+    truncated = max_pairs > 0 and candidate_pair_count > max_pairs
+    if truncated:
+        sample_indices = np.linspace(0, candidate_pair_count - 1, num=max_pairs, dtype=int)
+        candidate_pairs = [candidate_pairs[index] for index in sorted(set(sample_indices.tolist()))]
+
+    per_pair = []
+    for slice_index, source_phase, target_phase in candidate_pairs:
+        source_image, source_masks = selected_frame_data[(slice_index, source_phase)]
+        target_image, target_masks = selected_frame_data[(slice_index, target_phase)]
+        tracking_field = _prepare_tvl1_tracking(source_image, target_image)
+        if tracking_field is None:
+            continue
+        region_results = {}
+        for contour_key in contour_keys:
+            source_mask = source_masks.get(contour_key)
+            target_mask = target_masks.get(contour_key)
+            if source_mask is None or target_mask is None or int(source_mask.sum()) <= 0 or int(target_mask.sum()) <= 0:
+                continue
+            predicted_mask, flow_stats = _warp_mask_with_tracking_field(source_mask, tracking_field)
+            if int(predicted_mask.sum()) <= 0:
+                continue
+            dice = _mask_dice(predicted_mask, target_mask)
+            area_delta_percent = None
+            target_area = float(target_mask.sum())
+            if target_area > 0:
+                area_delta_percent = ((float(predicted_mask.sum()) - target_area) / target_area) * 100.0
+            boundary_distance = _mean_boundary_distance_mm(
+                predicted_mask,
+                target_mask,
+                spacing_y=spacing_y,
+                spacing_x=spacing_x,
+            )
+            region_results[contour_key] = {
+                "dice": _round_float(dice, 4),
+                "area_delta_percent": _round_float(area_delta_percent, 4),
+                "mean_boundary_distance_mm": _round_float(boundary_distance, 4),
+                **flow_stats,
+            }
+        if region_results:
+            per_pair.append(
+                {
+                    "slice_index": int(slice_index),
+                    "source_phase": int(source_phase),
+                    "target_phase": int(target_phase),
+                    "regions": region_results,
+                }
+            )
+
+    region_summary = {}
+    for contour_key in contour_keys:
+        dice_values = []
+        boundary_values = []
+        area_delta_values = []
+        mean_flow_values = []
+        for item in per_pair:
+            metrics = item["regions"].get(contour_key)
+            if not metrics:
+                continue
+            if isinstance(metrics.get("dice"), (int, float)):
+                dice_values.append(float(metrics["dice"]))
+            if isinstance(metrics.get("mean_boundary_distance_mm"), (int, float)):
+                boundary_values.append(float(metrics["mean_boundary_distance_mm"]))
+            if isinstance(metrics.get("area_delta_percent"), (int, float)):
+                area_delta_values.append(abs(float(metrics["area_delta_percent"])))
+            if isinstance(metrics.get("mean_flow_px"), (int, float)):
+                mean_flow_values.append(float(metrics["mean_flow_px"]))
+        if dice_values or boundary_values:
+            region_summary[contour_key] = {
+                "pair_count": len(dice_values),
+                "mean_dice": _round_float(sum(dice_values) / len(dice_values), 4) if dice_values else None,
+                "min_dice": _round_float(min(dice_values), 4) if dice_values else None,
+                "mean_boundary_distance_mm": _round_float(sum(boundary_values) / len(boundary_values), 4) if boundary_values else None,
+                "mean_abs_area_delta_percent": _round_float(sum(area_delta_values) / len(area_delta_values), 4) if area_delta_values else None,
+                "mean_flow_px": _round_float(sum(mean_flow_values) / len(mean_flow_values), 4) if mean_flow_values else None,
+            }
+
+    return {
+        "method": "experimental_tvl1_optical_flow_mask_validation",
+        "status": "completed",
+        "role": str(role or "unknown"),
+        "clinical_grade": False,
+        "pair_count": len(per_pair),
+        "candidate_pair_count": candidate_pair_count,
+        "max_pair_count": max_pairs,
+        "truncated": truncated,
+        "summary": region_summary,
+        "pairs": per_pair[:80],
+        "notes": [
+            "Uses only adjacent phases explicitly marked as manual/manual-refine (or validated) in frame metadata.",
+            "Warps each source mask with one shared phase-correlation plus TV-L1 field per phase pair.",
+            "Compares the warped mask with existing target contours; this validates temporal tracking feasibility.",
+            "This is not yet clinical-grade CMR feature tracking or stable material point correspondence.",
+        ],
     }
 
 
@@ -386,6 +907,43 @@ def _lge_settings_from_contours(contours: dict) -> tuple[str, float, bool]:
     return method, sd_multiplier, grey_zone
 
 
+def _manual_tracking_frame_keys(contours: dict) -> set[tuple[int, int]]:
+    frame_meta = contours.get("frame_meta") if isinstance(contours, dict) else None
+    if not isinstance(frame_meta, dict):
+        return set()
+
+    eligible: set[tuple[int, int]] = set()
+    for frame_key, metadata in frame_meta.items():
+        if not isinstance(metadata, dict):
+            continue
+        origin = str(metadata.get("origin") or "").lower()
+        if metadata.get("validated") is not True and origin not in {"manual", "manual_refine"}:
+            continue
+        try:
+            slice_text, phase_text = str(frame_key).split(":", 1)
+            eligible.add((int(slice_text), int(phase_text)))
+        except (TypeError, ValueError):
+            continue
+    return eligible
+
+
+def _tracking_validation_not_run(role: str) -> dict:
+    return {
+        "method": "on_demand_tracking_preview",
+        "status": "not_run",
+        "role": str(role or "unknown"),
+        "clinical_grade": False,
+        "pair_count": None,
+        "candidate_pair_count": None,
+        "summary": {},
+        "pairs": [],
+        "notes": [
+            "Tracking validation is intentionally excluded from routine contour-save recomputation.",
+            "Run the dedicated tracking preview to evaluate adjacent manually confirmed phases.",
+        ],
+    }
+
+
 def _save_measurement(series_id: int, module: str, payload: dict) -> dict:
     with get_conn() as conn:
         row = conn.execute(
@@ -405,6 +963,103 @@ def _save_measurement(series_id: int, module: str, payload: dict) -> dict:
     return payload
 
 
+def compute_lv_tracking_preview(series_id: int) -> dict:
+    """Compute an experimental temporal tracking preview without persisting it."""
+    with get_conn() as conn:
+        series = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
+    if series is None:
+        raise KeyError(series_id)
+
+    contours = _fetch_contours(series_id, "function") or {"frames": {}}
+    rows = int(series["rows"] or 1)
+    cols = int(series["cols"] or 1)
+    spacing_x = float(series["pixel_spacing_x"] or 1.0)
+    spacing_y = float(series["pixel_spacing_y"] or 1.0)
+    pixel_area = spacing_x * spacing_y
+    frames = list_frame_rows(series_id)
+    selected_frame_data: dict[tuple[int, int], tuple[np.ndarray, dict[str, np.ndarray]]] = {}
+    phase_endo_areas: dict[int, float] = {}
+    phase_trigger_times: dict[int, list[float]] = {}
+
+    for frame in frames:
+        slice_index = int(frame["slice_index"])
+        phase_index = int(frame["phase_index"])
+        frame_payload = contours.get("frames", {}).get(_frame_key(slice_index, phase_index))
+        if not frame_payload or not frame_payload.get("include", True):
+            continue
+        if _is_frame_excluded(contours, slice_index, phase_index):
+            continue
+        masks = _frame_masks(frame_payload, rows, cols)
+        endo = masks["endo"]
+        epi = masks["epi"]
+        if int(endo.sum()) <= 0 and int(epi.sum()) <= 0:
+            continue
+        image = read_frame_pixels(frame).astype(np.float32)
+        selected_frame_data[(slice_index, phase_index)] = (
+            image,
+            {
+                "endo": endo,
+                "epi": epi,
+                "myocardium": epi & ~endo,
+            },
+        )
+        phase_endo_areas[phase_index] = phase_endo_areas.get(phase_index, 0.0) + float(endo.sum())
+        trigger_time = _row_value(frame, "trigger_time", None)
+        if trigger_time is not None:
+            try:
+                phase_trigger_times.setdefault(phase_index, []).append(float(trigger_time))
+            except (TypeError, ValueError):
+                pass
+
+    phase_indices = sorted(phase_endo_areas)
+    phase_labels = contours.get("phase_labels") if isinstance(contours.get("phase_labels"), dict) else {}
+    auto_ed_phase = max(phase_endo_areas, key=phase_endo_areas.get) if phase_endo_areas else 0
+    auto_es_phase = min(phase_endo_areas, key=phase_endo_areas.get) if phase_endo_areas else 0
+    requested_ed = phase_labels.get("lv_ed", phase_labels.get("ed"))
+    requested_es = phase_labels.get("lv_es", phase_labels.get("es"))
+    ed_phase = int(requested_ed) if requested_ed in phase_endo_areas else int(auto_ed_phase)
+    es_phase = int(requested_es) if requested_es in phase_endo_areas else int(auto_es_phase)
+    phase_times_ms = {
+        phase: (sum(values) / len(values) if values else None)
+        for phase, values in phase_trigger_times.items()
+    }
+    role = str(_row_value(series, "role", "unknown"))
+    strain_proxy = _compute_lv_2d_strain_proxy(
+        selected_frame_data,
+        phase_indices,
+        role=role,
+        ed_phase=ed_phase,
+        es_phase=es_phase,
+        pixel_area=pixel_area,
+        spacing_y=spacing_y,
+        spacing_x=spacing_x,
+        phase_times_ms=phase_times_ms,
+    )
+    tracking_validation = _compute_lv_tracking_validation(
+        selected_frame_data,
+        role=role,
+        spacing_y=spacing_y,
+        spacing_x=spacing_x,
+        eligible_frame_keys=_manual_tracking_frame_keys(contours),
+    )
+    return {
+        "module": "tracking_preview",
+        "series_id": series_id,
+        "role": role,
+        "persisted": False,
+        "metrics": {
+            "ed_phase": ed_phase,
+            "es_phase": es_phase,
+            "usable_phase_count": len(phase_indices),
+            "tracking_pair_count": tracking_validation.get("pair_count", 0),
+        },
+        "research": {
+            "strain_proxy": strain_proxy,
+            "tracking_validation": tracking_validation,
+        },
+    }
+
+
 def recompute_function(series_id: int) -> dict:
     with get_conn() as conn:
         series = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
@@ -420,8 +1075,10 @@ def recompute_function(series_id: int) -> dict:
     frames = list_frame_rows(series_id)
 
     phase_totals: dict[int, dict[str, float]] = {}
+    phase_trigger_times: dict[int, list[float]] = {}
     per_slice = []
     selected_frame_data: dict[tuple[int, int], tuple[np.ndarray, dict[str, np.ndarray]]] = {}
+    selected_frame_source_keys: dict[tuple[int, int], dict[str, list[str]]] = {}
     for frame in frames:
         frame_payload = contours["frames"].get(_frame_key(frame["slice_index"], frame["phase_index"]))
         if not frame_payload or not frame_payload.get("include", True):
@@ -431,33 +1088,48 @@ def recompute_function(series_id: int) -> dict:
         image = read_frame_pixels(frame).astype(np.float32)
         masks = _frame_masks(frame_payload, rows, cols)
         myocardium_mask = masks["epi"] & ~masks["endo"]
+        fat_mask, fat_exclude_mask, fat_method, fat_source_keys = _function_fat_masks(masks)
         endo_area = float(masks["endo"].sum()) * pixel_area
         epi_area = float(masks["epi"].sum()) * pixel_area
         rv_area = float(masks["rv"].sum()) * pixel_area
-        fat_area = float(masks["fat"].sum()) * pixel_area
+        fat_area = float(fat_mask.sum()) * pixel_area
+        fat_exclude_area = float(fat_exclude_mask.sum()) * pixel_area
         lv_volume = endo_area * slice_thickness / 1000.0
         rv_volume = rv_area * slice_thickness / 1000.0
         myo_volume = max(epi_area - endo_area, 0.0) * slice_thickness / 1000.0
         fat_volume = fat_area * slice_thickness / 1000.0
+        fat_exclude_volume = fat_exclude_area * slice_thickness / 1000.0
         phase_totals.setdefault(frame["phase_index"], {"lv": 0.0, "rv": 0.0, "mass": 0.0})
         phase_totals[frame["phase_index"]]["lv"] += lv_volume
         phase_totals[frame["phase_index"]]["rv"] += rv_volume
         phase_totals[frame["phase_index"]]["mass"] += myo_volume * 1.05
+        trigger_time = _row_value(frame, "trigger_time", None)
+        if trigger_time is not None:
+            try:
+                phase_trigger_times.setdefault(int(frame["phase_index"]), []).append(float(trigger_time))
+            except (TypeError, ValueError):
+                pass
         selected_frame_data[(frame["slice_index"], frame["phase_index"])] = (
             image,
             {
                 "endo": masks["endo"],
                 "epi": masks["epi"],
+                "ventricular_epi": masks["ventricular_epi"],
                 "myocardium": myocardium_mask,
                 "rv": masks["rv"],
-                "fat": masks["fat"],
+                "fat": fat_mask,
+                "fat_exclude": fat_exclude_mask,
                 "la": masks["la"],
                 "ra": masks["ra"],
             },
         )
+        selected_frame_source_keys[(frame["slice_index"], frame["phase_index"])] = {
+            "fat": fat_source_keys,
+            "fat_exclude": ["exclude"],
+        }
         fat_entropy = _extract_roi_features(
             image,
-            masks["fat"],
+            fat_mask,
             pixel_area=pixel_area,
             slice_thickness=slice_thickness,
             spacing_y=spacing_y,
@@ -471,6 +1143,9 @@ def recompute_function(series_id: int) -> dict:
                 "rv_volume_ml": round(rv_volume, 2),
                 "myocardium_volume_ml": round(myo_volume, 2),
                 "fat_volume_ml": round(fat_volume, 2),
+                "fat_exclude_volume_ml": round(fat_exclude_volume, 2),
+                "fat_measurement_method": fat_method,
+                "fat_source_contours": fat_source_keys,
                 "fat_entropy": _round_float(fat_entropy, 6),
             }
         )
@@ -500,19 +1175,23 @@ def recompute_function(series_id: int) -> dict:
     es_phase = manual_phase_labels.get("es") if manual_phase_labels.get("es") in phase_totals else auto_es_phase
     rv_ed_phase = ed_phase
     rv_es_phase = es_phase
+    strain_ed_phase = manual_phase_labels.get("lv_ed") if manual_phase_labels.get("lv_ed") in phase_totals else ed_phase
+    strain_es_phase = manual_phase_labels.get("lv_es") if manual_phase_labels.get("lv_es") in phase_totals else es_phase
     edv = phase_totals[ed_phase]["lv"]
     esv = phase_totals[es_phase]["lv"]
     rv_edv = phase_totals[rv_ed_phase]["rv"]
     rv_esv = phase_totals[rv_es_phase]["rv"]
 
-    region_names = ("endo", "epi", "myocardium", "rv", "fat", "la", "ra")
+    region_names = ("endo", "epi", "ventricular_epi", "myocardium", "rv", "fat", "fat_exclude", "la", "ra")
 
     region_source_keys: dict[str, list[str]] = {
         "endo": ["endo"],
         "epi": ["epi"],
+        "ventricular_epi": ["ventricular_epi"],
         "myocardium": ["endo", "epi"],
         "rv": ["rv"],
         "fat": ["fat"],
+        "fat_exclude": ["exclude"],
         "la": ["la"],
         "ra": ["ra"],
     }
@@ -532,7 +1211,7 @@ def recompute_function(series_id: int) -> dict:
                             {
                                 "slice_index": slice_index,
                                 "phase_index": phase_index,
-                                "contour_keys": region_source_keys.get(name, [name]),
+                                "contour_keys": selected_frame_source_keys.get((slice_index, phase_index), {}).get(name) or region_source_keys.get(name, [name]),
                             },
                         )
                     )
@@ -555,7 +1234,31 @@ def recompute_function(series_id: int) -> dict:
         research_region_features[label_name] = label_payload
 
     fat_ed_features = research_region_features.get("ed_phase", {}).get("fat", {})
-    fat_fallback_features = fat_ed_features or research_region_features.get("all_frames", {}).get("fat", {})
+    fat_all_features = research_region_features.get("all_frames", {}).get("fat", {})
+    fat_fallback_features = fat_ed_features or fat_all_features
+    fat_exclude_ed_features = research_region_features.get("ed_phase", {}).get("fat_exclude", {})
+    fat_exclude_all_features = research_region_features.get("all_frames", {}).get("fat_exclude", {})
+    fat_exclude_fallback_features = fat_exclude_ed_features or fat_exclude_all_features
+    phase_times_ms = {
+        phase: (sum(values) / len(values) if values else None)
+        for phase, values in phase_trigger_times.items()
+    }
+    strain_proxy = _compute_lv_2d_strain_proxy(
+        selected_frame_data,
+        sorted(phase_totals),
+        role=str(_row_value(series, "role", "unknown")),
+        ed_phase=int(strain_ed_phase),
+        es_phase=int(strain_es_phase),
+        pixel_area=pixel_area,
+        spacing_y=spacing_y,
+        spacing_x=spacing_x,
+        phase_times_ms=phase_times_ms,
+    )
+    strain_summary = strain_proxy.get("summary", {})
+    tracking_validation = _tracking_validation_not_run(str(_row_value(series, "role", "unknown")))
+    tracking_endo: dict = {}
+    tracking_epi: dict = {}
+    tracking_myo: dict = {}
     payload = {
         "module": "function",
         "series_id": series_id,
@@ -574,12 +1277,38 @@ def recompute_function(series_id: int) -> dict:
             "rv_ef_percent": round(((rv_edv - rv_esv) / rv_edv) * 100.0, 2) if rv_edv else None,
             "lv_mass_g": round(phase_totals[ed_phase]["mass"], 2),
             "epicardial_fat_volume_ml": _round_float(fat_fallback_features.get("volume_ml"), 4),
+            "epicardial_fat_ed_volume_ml": _round_float(fat_ed_features.get("volume_ml"), 4),
+            "epicardial_fat_all_frames_volume_ml": _round_float(fat_all_features.get("volume_ml"), 4),
+            "epicardial_fat_exclude_volume_ml": _round_float(fat_exclude_fallback_features.get("volume_ml"), 4),
+            "epicardial_fat_exclude_ed_volume_ml": _round_float(fat_exclude_ed_features.get("volume_ml"), 4),
+            "epicardial_fat_exclude_all_frames_volume_ml": _round_float(fat_exclude_all_features.get("volume_ml"), 4),
             "epicardial_fat_entropy": _round_float(fat_fallback_features.get("intensity_entropy"), 6),
+            "lv_2d_strain_proxy_method": strain_proxy.get("method"),
+            "lv_2d_strain_proxy_clinical_grade": False,
+            "lv_2d_strain_proxy_ed_phase": strain_proxy.get("ed_phase"),
+            "lv_2d_strain_proxy_es_phase": strain_proxy.get("es_phase"),
+            "lv_2d_gcs_proxy_peak_percent": _round_float(strain_summary.get("gcs_peak_percent"), 4),
+            "lv_2d_gcs_proxy_es_percent": _round_float(strain_summary.get("gcs_es_percent"), 4),
+            "lv_2d_grs_proxy_peak_percent": _round_float(strain_summary.get("grs_peak_percent"), 4),
+            "lv_2d_grs_proxy_es_percent": _round_float(strain_summary.get("grs_es_percent"), 4),
+            "lv_2d_gls_proxy_peak_percent": _round_float(strain_summary.get("gls_peak_percent"), 4),
+            "lv_2d_gls_proxy_es_percent": _round_float(strain_summary.get("gls_es_percent"), 4),
+            "lv_tracking_validation_method": tracking_validation.get("method"),
+            "lv_tracking_validation_clinical_grade": False,
+            "lv_tracking_validation_pair_count": tracking_validation.get("pair_count"),
+            "lv_tracking_endo_mean_dice": _round_float(tracking_endo.get("mean_dice"), 4),
+            "lv_tracking_epi_mean_dice": _round_float(tracking_epi.get("mean_dice"), 4),
+            "lv_tracking_myocardium_mean_dice": _round_float(tracking_myo.get("mean_dice"), 4),
+            "lv_tracking_endo_boundary_distance_mm": _round_float(tracking_endo.get("mean_boundary_distance_mm"), 4),
+            "lv_tracking_epi_boundary_distance_mm": _round_float(tracking_epi.get("mean_boundary_distance_mm"), 4),
+            "lv_tracking_myocardium_boundary_distance_mm": _round_float(tracking_myo.get("mean_boundary_distance_mm"), 4),
         },
         "phase_volumes": phase_volumes,
         "per_slice": per_slice,
         "research": {
             "region_features": research_region_features,
+            "strain_proxy": strain_proxy,
+            "tracking_validation": tracking_validation,
         },
     }
     return _save_measurement(series_id, "function", payload)

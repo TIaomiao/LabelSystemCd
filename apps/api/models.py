@@ -27,11 +27,14 @@ class FrameContour(BaseModel):
     ra: Optional[PolygonContour] = None
     endo: Optional[PolygonContour] = None
     epi: Optional[PolygonContour] = None
+    ventricular_epi: Optional[PolygonContour] = None
     rv: Optional[PolygonContour] = None
     fat: Optional[PolygonContour] = None
+    fat_outer: Optional[PolygonContour] = None
     remote: Optional[PolygonContour] = None
     enhanced: Optional[PolygonContour] = None
     exclude: Optional[PolygonContour] = None
+    exclude_regions: Optional[List[PolygonContour]] = None
     mvo: Optional[PolygonContour] = None
 
 
@@ -136,7 +139,7 @@ class PromptSegmentationRequest(BaseModel):
     module: ModuleName
     slice_index: int
     phase_index: int
-    contour_key: Literal["la", "ra", "endo", "epi", "rv", "fat", "remote", "enhanced", "exclude", "mvo"]
+    contour_key: Literal["la", "ra", "endo", "epi", "ventricular_epi", "rv", "fat", "fat_outer", "remote", "enhanced", "exclude", "mvo"]
     prompt_mode: Literal["box", "brush"]
     box: Optional[List[float]] = None
     brush_points: List[Point2D] = Field(default_factory=list)

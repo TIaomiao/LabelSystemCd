@@ -943,6 +943,20 @@
               }
             ]
           },
+          "exclude_regions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PolygonContour"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclude Regions"
+          },
           "mvo": {
             "anyOf": [
               {
@@ -1023,6 +1037,20 @@
                 "type": "null"
               }
             ]
+          },
+          "exclude_regions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PolygonContour"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclude Regions"
           },
           "mvo": {
             "anyOf": [

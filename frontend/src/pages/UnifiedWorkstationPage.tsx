@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   FaBrain,
   FaChartBar,
+  FaComments,
   FaDatabase,
   FaChevronLeft,
   FaChevronRight,
@@ -31,6 +32,7 @@ import EvaluationView from '../components/views/EvaluationView';
 import FunctionQcView from './FunctionQcView';
 import { WORKSTATION_CHANGELOG, WORKSTATION_VERSION } from '../utils/workstationMeta';
 import { flushCviIframeAutosave } from '../utils/cviAutosave';
+import FeedbackAssistantPanel, { FeedbackPageContext } from '../components/feedback/FeedbackAssistantPanel';
 import './UnifiedWorkstationPage.css';
 
 interface CviCase {
@@ -46,11 +48,15 @@ interface CviCase {
   cvi_study_id?: number | null;
   anon_label?: string;
   public_case_code?: string;
+  primary_id_label?: string;
+  primary_id?: string;
   imported_at?: string | null;
   annotation_summary?: {
     is_annotated: boolean;
     completed_modules: string[];
     completed_count: number;
+    annotated_series_count?: number;
+    annotated_frame_count?: number;
     latest_annotation_at?: string | null;
   };
 }
@@ -78,6 +84,7 @@ type ModuleKey =
   | 'functionQc'
   | 'hospital'
   | 'experiment'
+  | 'ukbAgent'
   | 'legacy';
 
 interface ModuleDefinition {
@@ -94,7 +101,51 @@ const sourceLabel: Record<string, string> = {
   functional: '病例库'
 };
 
+const UKB_AGENT_WORKSTATION_URL =
+  ((import.meta as any).env?.VITE_UKB_AGENT_WORKSTATION_URL as string | undefined)
+  || 'https://tender-doe-trial-dark.trycloudflare.com/';
+
 const mergeSourceOptions = (serverSources: CviSource[]): CviSource[] => serverSources || [];
+
+const readApiPayload = async (response: Response) => {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      response.status >= 500
+        ? '病例库后端暂时不可用，请稍后重试。'
+        : `病例库接口返回了网页而不是数据（HTTP ${response.status}），请刷新后重试。`
+    );
+  }
+  return response.json();
+};
+
+const registrationIdFromCase = (caseItem?: CviCase | null) => {
+  if (!caseItem) return '';
+  if (caseItem.primary_id_label === '登记号' && caseItem.primary_id) return caseItem.primary_id;
+  if (caseItem.dataset !== 'CMR_ALL') return '';
+  for (const value of [caseItem.case_id, caseItem.public_case_code, caseItem.primary_id]) {
+    const match = (value || '').match(/(?:^|\D)(\d{10})(?!\d)/);
+    if (match?.[1]) return match[1];
+  }
+  return '';
+};
+
+const studyDateFromCase = (caseItem?: CviCase | null) => {
+  if (!caseItem || caseItem.dataset !== 'CMR_ALL') return '';
+  const match = (caseItem.public_case_code || caseItem.case_id || '').match(/20\d{6}/);
+  if (!match) return '';
+  const value = match[0];
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+};
+
+const caseDisplayName = (caseItem?: CviCase | null, fallback = '匿名病例') => {
+  if (!caseItem) return fallback;
+  const registrationId = registrationIdFromCase(caseItem);
+  if (registrationId) {
+    return `登记号：${registrationId}`;
+  }
+  return caseItem.anon_label || fallback;
+};
 
 const applyClientSourceFilter = (items: CviCase[], sourceValue: string): CviCase[] => {
   if (!sourceValue || sourceValue === 'all' || sourceValue === 'functional' || sourceValue === 'annotation') {
@@ -180,6 +231,12 @@ const modules: ModuleDefinition[] = [
     scroll: true
   },
   {
+    key: 'ukbAgent',
+    label: 'UKB 字段库',
+    description: '嵌入另一位实习生维护的 UKB Data Workstation',
+    icon: <FaDatabase />
+  },
+  {
     key: 'legacy',
     label: '旧入口',
     description: '保留原页面入口，便于迁移期间对照验证',
@@ -203,9 +260,11 @@ const CASE_FETCH_LIMIT_FALLBACK = 5000;
 const UnifiedWorkstationPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const canViewFeedbackDashboard = !!user?.is_admin || user?.username === 'ziantestpov';
   const [selectedModule, setSelectedModule] = useState<ModuleKey>('cvi');
   const [workstationUrl, setWorkstationUrl] = useState('/cvi-workstation-app/');
   const [cases, setCases] = useState<CviCase[]>([]);
+  const [caseTotal, setCaseTotal] = useState(0);
   const [sources, setSources] = useState<CviSource[]>([]);
   const [source, setSource] = useState('functional::CMR_ALL::report100');
   const [annotationStatus, setAnnotationStatus] = useState<'all' | 'annotated' | 'pending'>('all');
@@ -221,6 +280,7 @@ const UnifiedWorkstationPage: React.FC = () => {
   const [casePanelWidth, setCasePanelWidth] = useState(330);
   const [casePanelCollapsed, setCasePanelCollapsed] = useState(false);
   const [showChangeLog, setShowChangeLog] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const workstationFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const selectedCase = useMemo(
@@ -252,6 +312,18 @@ const UnifiedWorkstationPage: React.FC = () => {
     () => mergeSourceOptions(sources),
     [sources]
   );
+  const feedbackPageContext = useMemo<FeedbackPageContext>(() => {
+    const studyMatch = workstationUrl.match(/\/study\/(\d+)/);
+    return {
+      module: selectedModule,
+      module_label: activeModule.label,
+      dataset: selectedCase?.dataset,
+      source: selectedCase?.source,
+      case_catalog_id: selectedCase?.id,
+      study_id: studyMatch ? Number(studyMatch[1]) : undefined,
+      workstation_path: workstationUrl.split('?')[0],
+    };
+  }, [activeModule.label, selectedCase, selectedModule, workstationUrl]);
 
   useEffect(() => {
     const previous = document.documentElement.getAttribute('data-theme');
@@ -299,7 +371,7 @@ const UnifiedWorkstationPage: React.FC = () => {
       if (user?.is_admin && reviewUserId) params.set('review_user_id', String(reviewUserId));
       if (refresh) params.set('refresh', '1');
       let response = await fetch(`/api/cvi-library/cases?${params.toString()}`);
-      let payload = await response.json();
+      let payload = await readApiPayload(response);
       let usedCompatibilityFallback = false;
       if (!response.ok && payload?.error === 'Unknown source' && source.startsWith('functional::')) {
         const fallbackParams = new URLSearchParams({
@@ -311,7 +383,7 @@ const UnifiedWorkstationPage: React.FC = () => {
         if (user?.is_admin && reviewUserId) fallbackParams.set('review_user_id', String(reviewUserId));
         if (refresh) fallbackParams.set('refresh', '1');
         response = await fetch(`/api/cvi-library/cases?${fallbackParams.toString()}`);
-        payload = await response.json();
+        payload = await readApiPayload(response);
         usedCompatibilityFallback = response.ok;
       }
       if (!response.ok) {
@@ -321,6 +393,7 @@ const UnifiedWorkstationPage: React.FC = () => {
         ? applyClientSourceFilter(payload.items || [], source)
         : (payload.items || []);
       setCases(items);
+      setCaseTotal(Number(payload.total_count ?? items.length));
       const nextSources = mergeSourceOptions(payload.sources || []);
       setSources(nextSources);
       const nextSource = payload.source || nextSources[0]?.value;
@@ -392,7 +465,7 @@ const UnifiedWorkstationPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force })
       });
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
       if (!response.ok) {
         throw new Error(payload.error || '导入工作站失败');
       }
@@ -444,7 +517,7 @@ const UnifiedWorkstationPage: React.FC = () => {
   };
 
   const caseSubtitle = selectedCase
-    ? `${sourceLabel[selectedCase.source] || selectedCase.source} / ${selectedCase.dataset} / ${selectedCase.anon_label || '匿名病例'}`
+    ? `${sourceLabel[selectedCase.source] || selectedCase.source} / ${selectedCase.dataset} / ${caseDisplayName(selectedCase)}`
     : '请选择左侧病例';
 
   const renderCaseList = () => {
@@ -475,7 +548,7 @@ const UnifiedWorkstationPage: React.FC = () => {
           }}
         >
           <div className="uws-case-title">
-            <strong title={caseItem.public_case_code || caseItem.anon_label || '匿名病例'}>{caseItem.anon_label || '匿名病例'}</strong>
+            <strong title={caseDisplayName(caseItem)}>{caseDisplayName(caseItem)}</strong>
             <button
               className="uws-button"
               disabled={busy || !caseItem.has_dicom}
@@ -492,6 +565,8 @@ const UnifiedWorkstationPage: React.FC = () => {
             </button>
           </div>
           <div className="uws-case-meta">
+            {registrationIdFromCase(caseItem) ? `${caseItem.anon_label || '匿名病例'} / ` : ''}
+            {studyDateFromCase(caseItem) ? `${studyDateFromCase(caseItem)} / ` : ''}
             {sourceLabel[caseItem.source] || caseItem.source} / {caseItem.dataset}
           </div>
           <div className="uws-chip-row">
@@ -504,8 +579,12 @@ const UnifiedWorkstationPage: React.FC = () => {
                 {item.name} {item.dicom_count}
               </span>
             ))}
-            {caseItem.annotation_summary?.completed_count ? (
-              <span className="uws-chip is-ok">已标注 {caseItem.annotation_summary.completed_count}</span>
+            {caseItem.annotation_summary?.is_annotated ? (
+              <span className="uws-chip is-ok">
+                {caseItem.annotation_summary.annotated_frame_count
+                  ? `已标注 ${caseItem.annotation_summary.annotated_frame_count}帧`
+                  : `已标注 ${caseItem.annotation_summary.completed_count}项`}
+              </span>
             ) : (
               <span className="uws-chip is-warn">未标注</span>
             )}
@@ -578,20 +657,20 @@ const UnifiedWorkstationPage: React.FC = () => {
         className="uws-patient-nav-button"
         onClick={goToPreviousCase}
         disabled={!previousCase || openingId === previousCase.id}
-        title={previousCase ? `上一位：${previousCase.anon_label || '匿名病例'}` : '没有上一位患者'}
+        title={previousCase ? `上一位：${caseDisplayName(previousCase)}` : '没有上一位患者'}
       >
         <FaChevronLeft />
         {openingId === previousCase?.id ? '导入中' : '上一位'}
       </button>
       <div className="uws-patient-nav-current" title={caseSubtitle}>
         <span>当前病例</span>
-        <strong>{selectedCase?.anon_label || '未选择'}</strong>
+        <strong>{caseDisplayName(selectedCase, '未选择')}</strong>
       </div>
       <button
         className="uws-patient-nav-button is-primary"
         onClick={goToNextCase}
         disabled={!nextCase || openingId === nextCase.id}
-        title={nextCase ? `下一位：${nextCase.anon_label || '匿名病例'}` : '没有下一位患者'}
+        title={nextCase ? `下一位：${caseDisplayName(nextCase)}` : '没有下一位患者'}
       >
         {openingId === nextCase?.id ? '导入中' : '下一位'}
         <FaChevronRight />
@@ -621,6 +700,15 @@ const UnifiedWorkstationPage: React.FC = () => {
     }
     if (selectedModule === 'experiment') {
       return <ExperimentResultsPage />;
+    }
+    if (selectedModule === 'ukbAgent') {
+      return (
+        <iframe
+          title="UKB Data Workstation"
+          className="uws-frame uws-external-frame"
+          src={UKB_AGENT_WORKSTATION_URL}
+        />
+      );
     }
     return renderLegacyLinks();
   };
@@ -652,6 +740,14 @@ const UnifiedWorkstationPage: React.FC = () => {
         {renderPatientNav()}
         <div className="uws-userbar">
           <span>{user?.username || 'User'}</span>
+          <button
+            className={`uws-button uws-feedback-button${feedbackOpen ? ' is-primary' : ''}`}
+            onClick={() => setFeedbackOpen(value => !value)}
+            title={feedbackOpen ? '关闭工作站专家' : '打开工作站专家'}
+          >
+            <FaComments />
+            AI 专家
+          </button>
           <div className="uws-changelog-root" data-uws-changelog-root="true">
             <button
               className={`uws-button${showChangeLog ? ' is-primary' : ''}`}
@@ -699,6 +795,12 @@ const UnifiedWorkstationPage: React.FC = () => {
               后台监控
             </button>
           )}
+          {canViewFeedbackDashboard && (
+            <button className="uws-button" onClick={() => navigate(user?.is_admin ? '/admin/feedback' : '/feedback-dashboard')} title="医生反馈数据看板">
+              <FaComments />
+              {user?.is_admin ? '反馈面板' : '数据看板'}
+            </button>
+          )}
           <button className="uws-button" onClick={logout} title="退出登录">
             <FaSignOutAlt />
           </button>
@@ -710,8 +812,8 @@ const UnifiedWorkstationPage: React.FC = () => {
         className={`uws-main${casePanelCollapsed ? ' is-case-collapsed' : ''}`}
         style={{
           gridTemplateColumns: casePanelCollapsed
-            ? '48px minmax(0, 1fr)'
-            : `${casePanelWidth}px minmax(0, 1fr)`
+            ? `48px minmax(0, 1fr)${feedbackOpen ? ' clamp(390px, 25vw, 460px)' : ''}`
+            : `${casePanelWidth}px minmax(0, 1fr)${feedbackOpen ? ' clamp(390px, 25vw, 460px)' : ''}`
         }}
       >
         <aside className={`uws-case-panel${casePanelCollapsed ? ' is-collapsed' : ''}`}>
@@ -753,7 +855,7 @@ const UnifiedWorkstationPage: React.FC = () => {
                 className="uws-field"
                 value={searchInput}
                 onChange={event => setSearchInput(event.target.value)}
-                placeholder="搜索病例号 / 数据集"
+                placeholder="搜索登记号 / 病例号 / 数据集"
               />
               <select
                 className="uws-field"
@@ -777,7 +879,9 @@ const UnifiedWorkstationPage: React.FC = () => {
           </div>
           <div className="uws-case-list">
             <div className="uws-case-meta" style={{ padding: '0 18px 10px' }}>
-              已加载 {cases.length} 例，当前显示 {cases.length} 例
+              {!search && caseTotal > cases.length
+                ? `当前展示前 ${cases.length} / 共 ${caseTotal} 例，登记号搜索覆盖全部病例`
+                : `已加载 ${cases.length} 例，当前匹配 ${caseTotal} 例`}
             </div>
             {renderCaseList()}
           </div>
@@ -806,12 +910,30 @@ const UnifiedWorkstationPage: React.FC = () => {
                   <FaSave /> 保存沿用原模块接口
                 </span>
               )}
+              {selectedModule === 'ukbAgent' && (
+                <a
+                  className="uws-link-button"
+                  href={UKB_AGENT_WORKSTATION_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="在新标签页打开 UKB Data Workstation"
+                >
+                  <FaExternalLinkAlt />
+                  新标签打开
+                </a>
+              )}
             </div>
           </div>}
           <div className={`uws-work-area${workAreaScrollable ? ' is-scroll' : ''}`}>
             {renderWorkArea()}
           </div>
         </section>
+        {feedbackOpen && (
+          <FeedbackAssistantPanel
+            pageContext={feedbackPageContext}
+            onClose={() => setFeedbackOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

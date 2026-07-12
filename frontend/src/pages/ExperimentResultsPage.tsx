@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Spin, Row, Col, Typography, Tag, Empty, Table } from 'antd';
+import { Card, Spin, Row, Col, Tag, Empty, Table } from 'antd';
 import { getApiClient } from '../api/client';
 import { getApiBase } from '../utils/config';
 import { useLanguage } from '../context/LanguageContext';
 import EvaluationAnalyticsPanel from '../components/evaluation/EvaluationAnalyticsPanel';
 import './ExperimentResultsPage.css';
-
-const { Title } = Typography;
 
 interface Measurement {
   name: string;
@@ -82,17 +80,14 @@ const ExperimentResultsPage: React.FC = () => {
   return (
     <div className="experiment-results-page">
       <div className="experiment-page-shell">
-        <section className="experiment-hero">
-          <div>
-            <div className="experiment-hero__eyebrow">Experiment Console</div>
-            <h1 className="experiment-hero__title">实验结果与人工评分分析</h1>
-            <div className="experiment-hero__subtitle">
-              这一页同时承载实验图表、统计表，以及核心评分人的主观评价分布。上半部分强调人工评分一致性，
-              当前正式纳入 3 位专家评分人：lixingxing、wanglujing、宋豫皎；下半部分保留原始实验图像与统计输出，整体换成统一深色分析界面。
-            </div>
+        <section className="experiment-toolbar">
+          <div className="experiment-toolbar__title">
+            <span>CMR 工作站 / 实验分析</span>
+            <h1>实验结果</h1>
+            <p>人工评分、指标统计与实验图表</p>
           </div>
-          <div className="experiment-filter-card">
-            <div className="experiment-filter-card__label">人工评分分析病例库</div>
+          <label className="experiment-filter-card">
+            <span className="experiment-filter-card__label">评分病例库</span>
             <select
               value={analyticsLibrary}
               onChange={(event) => setAnalyticsLibrary(event.target.value)}
@@ -105,10 +100,10 @@ const ExperimentResultsPage: React.FC = () => {
               <option value="CMR_YA">延安医院</option>
               <option value="ALL">全部中心</option>
             </select>
-          </div>
+          </label>
         </section>
 
-        <section>
+        <section className="experiment-evaluation">
           <EvaluationAnalyticsPanel library={analyticsLibrary} />
         </section>
         

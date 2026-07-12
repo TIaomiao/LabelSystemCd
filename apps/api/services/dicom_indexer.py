@@ -18,7 +18,7 @@ def _looks_like_dicom_file(path: Path) -> bool:
         return False
     name = path.name.strip()
     lower = name.lower()
-    if lower.endswith((".dcm", ".ima")):
+    if lower.endswith((".dcm", ".dic", ".ima")):
         return True
     if lower == "dicomdir":
         return False
@@ -166,6 +166,16 @@ def _has_any_token(token: str, markers: tuple[str, ...]) -> bool:
 
 def _public_study_label(study_id: int) -> str:
     return f"Study-{study_id:06d}"
+
+
+def _public_patient_id_from_source(source_path: str, fallback: str) -> str:
+    normalized = str(source_path or "")
+    if "/CMR_ALL/" not in normalized:
+        return fallback
+    match = re.search(r"(?<!\d)(\d{10})(?!\d)", normalized)
+    if not match:
+        return fallback
+    return f"登记号：{match.group(1)}"
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -1023,7 +1033,10 @@ def fetch_study_detail(study_id: int, default_sample_path: str) -> dict[str, Any
             "id": study["id"],
             "study_uid": _public_study_label(study["id"]),
             "patient_name": "匿名患者",
-            "patient_id": _public_study_label(study["id"]),
+            "patient_id": _public_patient_id_from_source(
+                study_data.get("source_path") or "",
+                _public_study_label(study["id"]),
+            ),
             "patient_sex": study_data.get("patient_sex") or "",
             "patient_age": study_data.get("patient_age") or "",
             "study_date": study_data.get("study_date") or "",

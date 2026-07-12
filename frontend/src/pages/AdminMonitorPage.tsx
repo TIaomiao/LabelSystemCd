@@ -103,7 +103,10 @@ interface AssignmentCaseDetail {
   case_id: string;
   case_name?: string;
   anon_label?: string;
+  library_order?: number;
   public_case_code?: string;
+  primary_id_label?: string;
+  primary_id?: string;
   register_id?: string;
   case_date?: string;
   diseases?: string;
@@ -112,6 +115,9 @@ interface AssignmentCaseDetail {
   subdirs?: string;
   match_quality?: string;
   excel_refs?: string;
+  has_dicom?: boolean;
+  is_imported?: boolean;
+  sequence_summary?: { name: string; dicom_count: number }[];
 }
 
 interface AssignmentPreset {
@@ -122,8 +128,11 @@ interface AssignmentPreset {
   case_ids: string[];
   case_details?: AssignmentCaseDetail[];
   case_count: number;
+  kind?: 'dataset' | 'subset' | string;
+  lazy?: boolean;
   source?: string;
   description?: string;
+  identifier_labels?: string[];
 }
 
 interface MediaLog {
@@ -232,6 +241,11 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
   const [assignmentUsers, setAssignmentUsers] = useState<AdminUserLite[]>([]);
   const [assignmentPresets, setAssignmentPresets] = useState<AssignmentPreset[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState('');
+  const [selectionMode, setSelectionMode] = useState<'order' | 'identifier'>('order');
+  const [selectionText, setSelectionText] = useState('');
+  const [resolvedCaseDetails, setResolvedCaseDetails] = useState<AssignmentCaseDetail[]>([]);
+  const [selectionWarnings, setSelectionWarnings] = useState<string[]>([]);
+  const [resolvingSelection, setResolvingSelection] = useState(false);
   const [showAdvancedAssignment, setShowAdvancedAssignment] = useState(false);
   const [showAddCases, setShowAddCases] = useState(false);
   const [addCasesForm, setAddCasesForm] = useState({ target_count: '150', case_ids_text: '' });
@@ -288,12 +302,16 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
       if (presets.length > 0) {
         const first = presets[0];
         setSelectedPresetId(first.id);
+        setSelectionMode('order');
+        setSelectionText(first.case_count ? `1-${Math.min(100, first.case_count)}` : '');
+        setResolvedCaseDetails([]);
+        setSelectionWarnings([]);
         setAssignmentForm(prev => ({
           ...prev,
           namespace: first.namespace,
           dataset: first.dataset,
           case_id: '',
-          case_ids_text: first.case_ids.join('\n'),
+          case_ids_text: '',
         }));
       }
     } catch (err) {
@@ -311,9 +329,12 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
 
   const saveAssignment = async () => {
     setError('');
-    const targetUserIds = assignmentForm.user_ids.length > 0
-      ? assignmentForm.user_ids
-      : assignmentUsers.filter((user) => !user.is_admin).map((user) => user.id);
+    const targetUserIds = assignmentForm.user_ids;
+    if (!targetUserIds.length) {
+      setError('请先明确选择至少一名标注人员');
+      return;
+    }
+    if (assignments.length && !window.confirm(`当前选择中已有 ${assignments.length} 条分配记录。确认按本次人员和方式覆盖这些病例的负责人吗？`)) return;
     try {
       const response = await fetch('/api/admin/assignments', {
         method: 'POST',
@@ -467,6 +488,43 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
     }
   };
 
+  const resolveAssignmentSelection = async () => {
+    if (!selectedPresetId || !selectionText.trim()) return;
+    setResolvingSelection(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/assignment-selection/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preset_id: selectedPresetId,
+          selection_mode: selectionMode,
+          selection: selectionText,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || '解析病例范围失败');
+      const caseIds = (payload.case_ids || []) as string[];
+      setResolvedCaseDetails(payload.case_details || []);
+      setSelectionWarnings(payload.warnings || []);
+      setAssignmentForm(prev => ({
+        ...prev,
+        namespace: payload.preset.namespace,
+        dataset: payload.preset.dataset,
+        case_id: '',
+        case_ids_text: caseIds.join('\n'),
+      }));
+      await loadAssignments(payload.preset.namespace, payload.preset.dataset, caseIds);
+    } catch (err) {
+      setResolvedCaseDetails([]);
+      setSelectionWarnings([]);
+      setAssignmentForm(prev => ({ ...prev, case_ids_text: '' }));
+      setError(err instanceof Error ? err.message : '解析病例范围失败');
+    } finally {
+      setResolvingSelection(false);
+    }
+  };
+
 
   const selectedPreset = assignmentPresets.find((preset) => preset.id === selectedPresetId) || null;
   const selectedCaseIds = assignmentForm.case_ids_text
@@ -480,7 +538,7 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
   }, [assignmentForm.namespace, assignmentForm.dataset, selectedCaseIds.join('\n')]);
 
   const selectedCaseDetails = useMemo(() => {
-    const details = selectedPreset?.case_details || [];
+    const details = resolvedCaseDetails;
     const detailMap = new Map(details.map((item) => [item.case_id, item]));
     return selectedCaseIds.map((caseId, index) => detailMap.get(caseId) || {
       case_id: caseId,
@@ -488,7 +546,7 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
       anon_label: `病例${String(index + 1).padStart(3, '0')}`,
       public_case_code: '-',
     });
-  }, [selectedPreset, selectedCaseIds.join('\n')]);
+  }, [resolvedCaseDetails, selectedCaseIds.join('\n')]);
   const activeAssignmentByCase = useMemo(() => {
     const result: Record<string, Assignment | undefined> = {};
     Object.entries(assignmentMap).forEach(([caseId, items]) => {
@@ -500,24 +558,35 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
     const caseName = caseId.split('/').pop() || caseId;
     return activeAssignmentByCase[caseId] || activeAssignmentByCase[caseName];
   };
+  const currentAssignmentsForCase = (caseId: string) => {
+    const caseName = caseId.split('/').pop() || caseId;
+    return assignmentMap[caseId] || assignmentMap[caseName] || [];
+  };
   const currentAssignedCount = selectedCaseDetails.filter(item => currentAssignmentForCase(item.case_id)).length;
   const estimatedPerUser = assignmentForm.user_ids.length > 0
-    ? Math.ceil(selectedCaseIds.length / assignmentForm.user_ids.length)
+    ? assignmentForm.distribute
+      ? Math.ceil(selectedCaseIds.length / assignmentForm.user_ids.length)
+      : selectedCaseIds.length
     : 0;
   const fallbackAssignmentUserCount = assignmentUsers.filter((user) => !user.is_admin).length;
-  const effectiveAssignmentUserCount = assignmentForm.user_ids.length || fallbackAssignmentUserCount;
 
   const applyAssignmentPreset = (presetId: string) => {
     setSelectedPresetId(presetId);
     const preset = assignmentPresets.find((item) => item.id === presetId);
     if (!preset) return;
+    setSelectionMode('order');
+    setSelectionText(preset.case_count ? `1-${Math.min(100, preset.case_count)}` : '');
+    setResolvedCaseDetails([]);
+    setSelectionWarnings([]);
     setAssignmentForm(prev => ({
       ...prev,
       namespace: preset.namespace,
       dataset: preset.dataset,
       case_id: '',
-      case_ids_text: preset.case_ids.join('\n'),
+      case_ids_text: '',
     }));
+    setAssignments([]);
+    setAssignmentMap({});
   };
 
   const selectAllAssignmentUsers = () => {
@@ -567,7 +636,7 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
         <>
           <div style={summaryGridStyle}>
             <SummaryCard label="用户总数" value={data.users.total} detail={`待审核 ${data.users.pending} / 管理员 ${data.users.admins}`} />
-            <SummaryCard label="目录病例" value={totals.rootCases} detail={`CVI 目录 ${data.data.cvi_catalog.total} 例`} />
+            <SummaryCard label="目录扫描项（非去重）" value={totals.rootCases} detail={`CVI 工作站已登记 ${data.data.cvi_catalog.total} 例`} />
             <SummaryCard label="标注记录" value={totals.annotationRecords} detail={`模块累计 ${totals.annotationCases} 例次`} />
             <SummaryCard label="GPU" value={data.system.gpus.length} detail={data.system.gpus.length ? '已检测到显卡状态' : '未返回 nvidia-smi'} />
             <SummaryCard label="访问控制" value={data.security.assignments_total} detail={`影像日志 ${data.security.media_logs_total} 条，水印${data.security.watermark_enabled ? '开启' : '关闭'}`} />
@@ -612,7 +681,7 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
           <section id="case-assignments" style={sectionStyle}>
             <SectionTitle title="标注样本分配" />
             <div style={{ color: 'var(--text-secondary)', marginBottom: 12 }}>
-              这里用于分配需要勾画/标注的样本：例如 150 例分给 5 人后，每人只看自己的 30 例标注任务。报告评分库不按人隔离，所有医生都能看到完整 150 例用于年资对比。
+              先选择数据中心，再按库内序号或登记号解析病例，确认预览后分配。每个数据集独立编号，不同中心的“病例001”不会互相混用。
             </div>
 
             <div style={assignmentPanelStyle}>
@@ -630,39 +699,81 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
                     ))}
                   </select>
                 </label>
-                <label style={checkboxStyle}>
-                  <input
-                    type="checkbox"
-                    checked={assignmentForm.distribute}
-                    onChange={(event) => setAssignmentForm(prev => ({ ...prev, distribute: event.target.checked }))}
-                  />
-                  <span>平均分给标注人员</span>
+                <label style={compactFieldLabelStyle}>
+                  分配方式
+                  <select
+                    style={{ ...fieldStyle, minWidth: 210 }}
+                    value={assignmentForm.distribute ? 'balanced' : 'shared'}
+                    onChange={(event) => setAssignmentForm(prev => ({ ...prev, distribute: event.target.value === 'balanced' }))}
+                  >
+                    <option value="balanced">均分：每例仅一位负责人</option>
+                    <option value="shared">共享：每人获得全部所选病例</option>
+                  </select>
                 </label>
                 <button style={secondaryButtonStyle} onClick={selectAllAssignmentUsers}>选择全部非管理员</button>
                 <button
                   style={primaryButtonStyle}
-                  onClick={() => void (assignments.length ? clearCurrentAssignments() : saveAssignment())}
-                  disabled={selectedCaseIds.length === 0 || (!assignments.length && effectiveAssignmentUserCount === 0)}
+                  onClick={() => void saveAssignment()}
+                  disabled={selectedCaseIds.length === 0 || assignmentForm.user_ids.length === 0}
                 >
-                  {assignments.length ? '重新分配（清空当前分配）' : '分配标注任务'}
+                  {assignments.length ? '确认并覆盖所选病例分配' : '确认分配标注任务'}
                 </button>
+                <button style={dangerButtonStyle} onClick={() => void clearCurrentAssignments()} disabled={selectedCaseIds.length === 0 || assignments.length === 0}>清空所选病例分配</button>
               </div>
 
               <div style={presetSummaryStyle}>
                 <strong>{selectedPreset?.label || '未选择病例库'}</strong>
-                <span>{selectedCaseIds.length} 个病例</span>
+                <span>目录 {selectedPreset?.case_count ?? 0} 例</span>
+                <span>本次已解析 {selectedCaseIds.length} 例</span>
                 <span>数据集：{assignmentForm.dataset || '-'}</span>
                 <span>
                   {assignmentForm.user_ids.length
                     ? `已选 ${assignmentForm.user_ids.length} 人${estimatedPerUser ? `，约每人 ${estimatedPerUser} 例` : ''}`
-                    : `未手动选人，将使用全部非管理员 ${fallbackAssignmentUserCount} 人`}
+                    : `尚未选择人员（可选 ${fallbackAssignmentUserCount} 名非管理员）`}
                 </span>
                 <span>已分配 {currentAssignedCount} 例</span>
               </div>
               {selectedPreset?.description && <div style={pathStyle}>{selectedPreset.description}</div>}
 
               <div style={singleAssignPanelStyle}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>单独指定病例给个人</div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>选择本次需要分配的病例</div>
+                <div style={assignmentFormStyle}>
+                  <select
+                    style={{ ...fieldStyle, minWidth: 180 }}
+                    value={selectionMode}
+                    onChange={(event) => {
+                      const mode = event.target.value as 'order' | 'identifier';
+                      setSelectionMode(mode);
+                      setSelectionText('');
+                      setResolvedCaseDetails([]);
+                      setSelectionWarnings([]);
+                      setAssignmentForm(prev => ({ ...prev, case_ids_text: '' }));
+                    }}
+                  >
+                    <option value="order">按当前库内序号</option>
+                    <option value="identifier">按登记号 / 检查号 / 病例 ID</option>
+                  </select>
+                  <textarea
+                    style={{ ...caseIdsTextareaStyle, minWidth: 360, flex: '1 1 420px' }}
+                    value={selectionText}
+                    onChange={(event) => setSelectionText(event.target.value)}
+                    placeholder={selectionMode === 'order'
+                      ? '例如：1-100、205、300-320；输入“全部”选择当前数据集全部病例'
+                      : '每行一个登记号、检查号、匿名病例号或病例 ID'}
+                    rows={3}
+                  />
+                  <button style={primaryButtonStyle} onClick={() => void resolveAssignmentSelection()} disabled={!selectionText.trim() || resolvingSelection}>
+                    {resolvingSelection ? '正在解析…' : '解析并预览'}
+                  </button>
+                </div>
+                <div style={pathStyle}>
+                  库内序号按工作站首次登记顺序生成，只在当前数据集内有效；登记号对应多次检查时会全部列入预览并给出提示。
+                </div>
+                {selectionWarnings.length > 0 && <div style={warningBoxStyle}>{selectionWarnings.join('；')}</div>}
+              </div>
+
+              <div style={singleAssignPanelStyle}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>在已解析清单中单独指定给个人</div>
                 <div style={assignmentFormStyle}>
                   <label style={compactFieldLabelStyle}>
                     标注人员
@@ -681,14 +792,14 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
                     style={{ ...fieldStyle, minWidth: 260 }}
                     value={manualAssignForm.selection_text}
                     onChange={(event) => setManualAssignForm(prev => ({ ...prev, selection_text: event.target.value }))}
-                    placeholder="病例序号，如 1,5~10"
+                    placeholder="预览序号，如 1,5~10"
                   />
                   <button
                     style={primaryButtonStyle}
                     onClick={() => void assignSelectedCasesToUser()}
                     disabled={!manualAssignForm.user_id || !manualAssignForm.selection_text.trim() || selectedCaseIds.length === 0}
                   >
-                    按序号分配给个人
+                    按预览序号分配给个人
                   </button>
                   <button
                     style={dangerButtonStyle}
@@ -697,19 +808,19 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
                   >
                     清空该人员分配
                   </button>
-                  <span style={pathStyle}>按下方表格“序号”解析，支持 1、5-10、5~10。</span>
+                  <span style={pathStyle}>按下方预览表格“序号”解析，支持 1、5-10、5~10。</span>
                 </div>
               </div>
 
-              <div style={assignmentFormStyle}>
-                <button style={secondaryButtonStyle} onClick={() => setShowAddCases(prev => !prev)}>
-                  {showAddCases ? '收起添加病例' : '继续添加病例'}
-                </button>
-                <button style={secondaryButtonStyle} onClick={() => setAddCasesForm(prev => ({ ...prev, target_count: '150' }))}>目标 150 例</button>
-                <button style={secondaryButtonStyle} onClick={() => setAddCasesForm(prev => ({ ...prev, target_count: '200' }))}>目标 200 例</button>
-              </div>
+              {selectedPreset?.id === 'km_report100_2025' && <div style={assignmentFormStyle}>
+                  <button style={secondaryButtonStyle} onClick={() => setShowAddCases(prev => !prev)}>
+                    {showAddCases ? '收起专项病例维护' : '维护昆医报告评分专项子集'}
+                  </button>
+                  <button style={secondaryButtonStyle} onClick={() => setAddCasesForm(prev => ({ ...prev, target_count: '150' }))}>目标 150 例</button>
+                  <button style={secondaryButtonStyle} onClick={() => setAddCasesForm(prev => ({ ...prev, target_count: '200' }))}>目标 200 例</button>
+                </div>}
 
-              {showAddCases && (
+              {selectedPreset?.id === 'km_report100_2025' && showAddCases && (
                 <div style={addCasesPanelStyle}>
                   <div style={assignmentFormStyle}>
                     <input
@@ -736,7 +847,7 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
               )}
 
               <div style={userPickStyle}>
-                {assignmentUsers.map((user) => (
+                {assignmentUsers.filter(user => !user.is_admin).map((user) => (
                   <label key={user.id} style={{ ...checkboxStyle, opacity: user.is_admin ? 0.7 : 1 }}>
                     <input
                       type="checkbox"
@@ -748,7 +859,7 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
                           : [...prev.user_ids, user.id],
                       }))}
                     />
-                    <span>{user.username}{user.is_admin ? '（管理员）' : ''}</span>
+                    <span>{user.username}</span>
                   </label>
                 ))}
               </div>
@@ -797,12 +908,14 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    <Th>序号</Th>
-                    <Th>匿名病例</Th>
+                    <Th>预览序号</Th>
+                    <Th>库内序号</Th>
+                    <Th>病例标识</Th>
                     <Th>病种</Th>
                     <Th>性别/年龄</Th>
                     <Th>日期</Th>
                     <Th>序列</Th>
+                    <Th>目录状态</Th>
                     <Th>当前负责人</Th>
                     <Th>重新分配</Th>
                   </tr>
@@ -810,18 +923,24 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
                 <tbody>
                   {selectedCaseDetails.map((caseDetail, index) => {
                     const currentAssignment = currentAssignmentForCase(caseDetail.case_id);
+                    const caseAssignments = currentAssignmentsForCase(caseDetail.case_id);
+                    const sequenceText = caseDetail.subdirs || (caseDetail.sequence_summary || []).map(item => item.name).join('、');
+                    const primaryId = caseDetail.primary_id || caseDetail.register_id || caseDetail.public_case_code || '-';
                     return (
                       <tr key={caseDetail.case_id}>
                         <Td>{index + 1}</Td>
+                        <Td>{caseDetail.library_order || '-'}</Td>
                         <Td>
                           <div style={{ fontWeight: 600 }}>{caseDetail.anon_label || `病例${String(index + 1).padStart(3, '0')}`}</div>
-                          <div style={pathStyle}>检查号：{caseDetail.public_case_code || '-'}</div>
+                          <div style={pathStyle}>{caseDetail.primary_id_label || '登记号/检查号'}：{primaryId}</div>
+                          <div style={pathStyle} title={caseDetail.case_id}>病例 ID：{caseDetail.case_id}</div>
                         </Td>
                         <Td>{caseDetail.diseases || '-'}</Td>
                         <Td>{[caseDetail.sex, caseDetail.age].filter(Boolean).join(' / ') || '-'}</Td>
                         <Td>{caseDetail.case_date || '-'}</Td>
-                        <Td>{caseDetail.subdirs || '-'}</Td>
-                        <Td>{currentAssignment?.username || '-'}</Td>
+                        <Td>{sequenceText || '-'}</Td>
+                        <Td>{caseDetail.is_imported ? '已导入 CVI' : caseDetail.has_dicom ? '已登记 DICOM' : '-'}</Td>
+                        <Td>{caseAssignments.map(item => item.username).filter(Boolean).join('、') || '-'}</Td>
                         <Td>
                           <select
                             style={{ ...fieldStyle, minWidth: 150 }}
@@ -1405,6 +1524,16 @@ const errorStyle: React.CSSProperties = {
   border: '1px solid var(--error-color)',
   color: 'var(--error-color)',
   marginBottom: 16,
+};
+
+const warningBoxStyle: React.CSSProperties = {
+  marginTop: 10,
+  padding: '9px 11px',
+  borderRadius: 6,
+  border: '1px solid rgba(210, 138, 53, 0.45)',
+  background: 'rgba(210, 138, 53, 0.10)',
+  color: 'var(--text-primary)',
+  fontSize: 13,
 };
 
 const pathStyle: React.CSSProperties = {

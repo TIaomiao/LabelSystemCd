@@ -596,6 +596,208 @@ class CardiacAnnotation(db.Model):
             'annotations_data': self.annotations_data
         }
 
+
+class FeedbackSession(db.Model):
+    __tablename__ = 'feedback_session'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    title = db.Column(db.String(160), default='新对话', nullable=False)
+    status = db.Column(db.String(24), default='active', nullable=False, index=True)
+    context_json = db.Column(db.JSON)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_message_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    user = db.relationship('User', backref=db.backref('feedback_sessions', lazy=True))
+
+    def to_dict(self, include_user=False):
+        payload = {
+            'id': self.id,
+            'title': self.title or '新对话',
+            'status': self.status or 'active',
+            'context': self.context_json or {},
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_message_at': self.last_message_at.isoformat() if self.last_message_at else None,
+        }
+        if include_user:
+            payload.update({
+                'user_id': self.user_id,
+                'username': self.user.username if self.user else None,
+            })
+        return payload
+
+
+class FeedbackMessage(db.Model):
+    __tablename__ = 'feedback_message'
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('feedback_session.id'), nullable=False, index=True)
+    author_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    role = db.Column(db.String(16), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    reasoning_level = db.Column(db.String(16), default='medium', nullable=False)
+    page_context = db.Column(db.JSON)
+    model_name = db.Column(db.String(120))
+    latency_ms = db.Column(db.Integer)
+    rating = db.Column(db.String(16))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    session = db.relationship(
+        'FeedbackSession',
+        backref=db.backref('messages', lazy=True, cascade='all, delete-orphan'),
+    )
+    author = db.relationship('User')
+
+    def to_dict(self, include_debug=False):
+        payload = {
+            'id': self.id,
+            'session_id': self.session_id,
+            'role': self.role,
+            'content': self.content,
+            'reasoning_level': self.reasoning_level or 'medium',
+            'page_context': self.page_context or {},
+            'rating': self.rating,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'attachments': [item.to_dict() for item in self.attachments],
+        }
+        if include_debug:
+            payload.update({
+                'author_id': self.author_id,
+                'model_name': self.model_name,
+                'latency_ms': self.latency_ms,
+            })
+        return payload
+
+
+class FeedbackAttachment(db.Model):
+    __tablename__ = 'feedback_attachment'
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('feedback_session.id'), nullable=False, index=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('feedback_message.id'), index=True)
+    uploader_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    storage_path = db.Column(db.Text, nullable=False)
+    original_name = db.Column(db.String(255), default='screenshot.png', nullable=False)
+    mime_type = db.Column(db.String(64), default='image/png', nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False)
+    width = db.Column(db.Integer, nullable=False)
+    height = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    session = db.relationship('FeedbackSession', backref=db.backref('attachments', lazy=True))
+    message = db.relationship(
+        'FeedbackMessage',
+        backref=db.backref('attachments', lazy=True, order_by='FeedbackAttachment.id'),
+    )
+    uploader = db.relationship('User')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'session_id': self.session_id,
+            'message_id': self.message_id,
+            'original_name': self.original_name or 'screenshot.png',
+            'mime_type': self.mime_type or 'image/png',
+            'size_bytes': self.size_bytes,
+            'width': self.width,
+            'height': self.height,
+            'url': f'/api/feedback/attachments/{self.id}',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class FeedbackIssue(db.Model):
+    __tablename__ = 'feedback_issue'
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('feedback_session.id'), nullable=False, index=True)
+    reporter_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    source_message_id = db.Column(db.Integer, db.ForeignKey('feedback_message.id'), index=True)
+    category = db.Column(db.String(32), default='other', nullable=False, index=True)
+    title = db.Column(db.String(200), nullable=False)
+    summary = db.Column(db.Text, default='', nullable=False)
+    page = db.Column(db.String(120), default='', nullable=False)
+    operation = db.Column(db.Text, default='', nullable=False)
+    expected_behavior = db.Column(db.Text, default='', nullable=False)
+    actual_behavior = db.Column(db.Text, default='', nullable=False)
+    impact = db.Column(db.Text, default='', nullable=False)
+    severity = db.Column(db.String(16), default='medium', nullable=False, index=True)
+    status = db.Column(db.String(24), default='open', nullable=False, index=True)
+    acceptance_criteria = db.Column(db.Text, default='', nullable=False)
+    change_scope = db.Column(db.String(32), default='needs_review', nullable=False)
+    admin_note = db.Column(db.Text, default='', nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    session = db.relationship('FeedbackSession', backref=db.backref('issues', lazy=True))
+    reporter = db.relationship('User')
+    source_message = db.relationship('FeedbackMessage')
+
+    def to_dict(self, include_user=False):
+        payload = {
+            'id': self.id,
+            'session_id': self.session_id,
+            'source_message_id': self.source_message_id,
+            'category': self.category or 'other',
+            'title': self.title,
+            'summary': self.summary or '',
+            'page': self.page or '',
+            'operation': self.operation or '',
+            'expected_behavior': self.expected_behavior or '',
+            'actual_behavior': self.actual_behavior or '',
+            'impact': self.impact or '',
+            'severity': self.severity or 'medium',
+            'status': self.status or 'open',
+            'acceptance_criteria': self.acceptance_criteria or '',
+            'change_scope': self.change_scope or 'needs_review',
+            'admin_note': self.admin_note or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_user:
+            payload.update({
+                'reporter_id': self.reporter_id,
+                'reporter_username': self.reporter.username if self.reporter else None,
+            })
+        return payload
+
+
+class FeedbackWorkPlan(db.Model):
+    __tablename__ = 'feedback_work_plan'
+
+    id = db.Column(db.Integer, primary_key=True)
+    issue_id = db.Column(db.Integer, db.ForeignKey('feedback_issue.id'), nullable=False, unique=True, index=True)
+    status = db.Column(db.String(24), default='draft', nullable=False, index=True)
+    proposal_json = db.Column(db.JSON, nullable=False, default=dict)
+    generated_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    approved_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    approved_at = db.Column(db.DateTime)
+    queue_note = db.Column(db.Text, default='', nullable=False)
+    execution_note = db.Column(db.Text, default='', nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    issue = db.relationship('FeedbackIssue', backref=db.backref('work_plan', uselist=False, lazy=True))
+    generated_by = db.relationship('User', foreign_keys=[generated_by_id])
+    approved_by = db.relationship('User', foreign_keys=[approved_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'issue_id': self.issue_id,
+            'status': self.status or 'draft',
+            'proposal': self.proposal_json or {},
+            'generated_by': self.generated_by.username if self.generated_by else None,
+            'approved_by': self.approved_by.username if self.approved_by else None,
+            'approved_at': self.approved_at.isoformat() if self.approved_at else None,
+            'queue_note': self.queue_note or '',
+            'execution_note': self.execution_note or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
 class MedicalMultimodalClassifier(nn.Module):
     """医学多模态分类器：结合医学影像和指令进行分类"""
     

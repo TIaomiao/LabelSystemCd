@@ -34,22 +34,57 @@ interface PatientNode {
 interface DiseaseNode {
   name: string;
   patients: PatientNode[];
+  source_count: number;
+  available_count: number;
 }
 
 interface HospitalNode {
   id: string;
   name: string;
+  dataset?: string;
+  source_count: number;
+  available_count: number;
   diseases: DiseaseNode[];
+}
+
+interface HospitalInventoryItem {
+  dataset: string;
+  label: string;
+  raw_candidate_count: number;
+  raw_count_basis: string;
+  catalog_count: number;
+  dicom_case_count: number;
+  imported_count: number;
+  classified_output_count: number;
+  classification_status: string;
+  classification_label: string;
+  classification_category_count: number;
+  access_status: string;
+  access_label: string;
+}
+
+interface HospitalInventory {
+  items: HospitalInventoryItem[];
+  totals: {
+    datasets: number;
+    raw_candidates: number;
+    catalog: number;
+    imported: number;
+    classified_output: number;
+  };
+  count_definitions: Record<string, string>;
 }
 
 type ModuleType = 'functional' | 'lge' | 'analysis' | 'evaluation' | 'structure' | 'other-findings';
 
-const CACHE_KEY = 'hospital_tree_data';
+const CACHE_KEY = 'hospital_tree_data_v2';
 
 const HospitalDiseaseBrowserPage: React.FC = () => {
   const { t } = useLanguage();
   const [treeData, setTreeData] = useState<HospitalNode[]>([]);
+  const [inventory, setInventory] = useState<HospitalInventory | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   
   // Selection State
@@ -96,8 +131,13 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
     return data.map((h: any) => ({
       id: h.id,
       name: h.name,
+      dataset: h.dataset,
+      source_count: Number(h.source_count || 0),
+      available_count: Number(h.available_count || 0),
       diseases: h.diseases.map((d: any) => ({
         name: d.name,
+        source_count: Number(d.source_count ?? d.patients?.length ?? 0),
+        available_count: Number(d.available_count ?? d.patients?.length ?? 0),
         patients: Array.isArray(d.patients) 
           ? d.patients.map((p: string) => ({ name: p, dataset: d.dataset, caseId: p }))
           : []
@@ -108,23 +148,32 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
   const fetchTreeData = async (showLoading = true, forceRefresh = false) => {
     try {
       if (showLoading) setLoading(true);
+      setError('');
       
       let url = '/api/hospital-browser/tree';
       if (forceRefresh) {
         url += '?refresh=true';
       }
       
-      const res = await fetch(url);
-      const rawData = await res.json();
+      const [treeResponse, inventoryResponse] = await Promise.all([
+        fetch(url),
+        fetch('/api/hospital-browser/inventory'),
+      ]);
+      const rawData = await treeResponse.json();
+      const inventoryData = await inventoryResponse.json();
+      if (!treeResponse.ok) throw new Error(rawData.error || '医院分类树加载失败');
+      if (!inventoryResponse.ok) throw new Error(inventoryData.error || '多中心接入统计加载失败');
       
       // Save raw data to cache
       localStorage.setItem(CACHE_KEY, JSON.stringify(rawData));
       
       const transformed = transformApiData(rawData);
       setTreeData(transformed);
+      setInventory(inventoryData);
       
     } catch (err) {
       console.error("Failed to fetch hospital tree", err);
+      setError(err instanceof Error ? err.message : '医院数据加载失败');
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -148,6 +197,8 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
     setSelectedCase({ dataset: patient.dataset, caseId: patient.caseId });
     setSelectedModule(module);
   };
+
+  const inventoryByDataset = new Map((inventory?.items || []).map(item => [item.dataset, item]));
 
   // Helper to render module item (leaf)
   const renderModuleItem = (patient: PatientNode, module: ModuleType, label: string, icon: React.ReactNode) => {
@@ -206,6 +257,7 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
     return treeData.map(hospital => {
       const hospKey = `hospital:${hospital.id}`;
       const isHospExpanded = expandedItems.has(hospKey);
+      const hospitalInventory = hospital.dataset ? inventoryByDataset.get(hospital.dataset) : undefined;
       
       // Filter logic could go here if searchTerm exists
       
@@ -226,9 +278,14 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
               borderBottom: '1px solid var(--border-color)'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               {isHospExpanded ? <FaFolderOpen color="var(--accent-gold)" /> : <FaFolder color="var(--text-tertiary)" />}
-              {hospital.name}
+              <div style={{ minWidth: 0 }}>
+                <div>{hospital.name}</div>
+                <div style={{ marginTop: 3, color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 400 }}>
+                  目录 {hospitalInventory?.catalog_count ?? '-'} · 已导入 {hospitalInventory?.imported_count ?? '-'} · 可浏览 {hospital.available_count}
+                </div>
+              </div>
             </div>
             {isHospExpanded ? <FaChevronDown size={10} /> : <FaChevronRight size={10} />}
           </div>
@@ -256,8 +313,12 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {isDisExpanded ? <FaFolderOpen size={14} color="#888" /> : <FaFolder size={14} color="#888" />}
-                    <span style={{ fontSize: '14px' }}>{disease.name}</span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>({disease.patients.length})</span>
+                    <div>
+                      <div style={{ fontSize: '14px' }}>{disease.name}</div>
+                      <div style={{ marginTop: 2, fontSize: '11px', color: 'var(--text-muted)' }}>
+                        清单 {disease.source_count} · 当前可浏览 {disease.available_count}
+                      </div>
+                    </div>
                   </div>
                   {isDisExpanded ? <FaChevronDown size={10} /> : <FaChevronRight size={10} />}
                 </div>
@@ -315,6 +376,73 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
         </div>
       );
     });
+  };
+
+  const renderInventoryOverview = () => {
+    if (loading && !inventory) {
+      return <div style={{ height: '100%', display: 'grid', placeItems: 'center' }}><Spin /></div>;
+    }
+    if (!inventory) {
+      return <div style={{ padding: 24, color: 'var(--text-secondary)' }}>暂无多中心接入统计。</div>;
+    }
+    const summaryItems = [
+      ['数据中心', inventory.totals.datasets],
+      ['原始候选 Study', inventory.totals.raw_candidates],
+      ['工作站已登记', inventory.totals.catalog],
+      ['已导入 CVI', inventory.totals.imported],
+      ['分类 output 目录', inventory.totals.classified_output],
+    ];
+    return (
+      <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px 36px' }}>
+        <div style={{ marginBottom: 16 }}>
+          <h2 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 22 }}>多中心数据接入总览</h2>
+          <p style={{ margin: '6px 0 0', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            四个数字使用不同口径：原始候选、工作站目录、CVI 实际导入和医院分类输出不能相互替代。
+          </p>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 16 }}>
+          {summaryItems.map(([label, value]) => (
+            <div key={String(label)} style={{ padding: '12px 14px', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--bg-secondary)' }}>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{label}</div>
+              <strong style={{ display: 'block', marginTop: 5, color: 'var(--text-primary)', fontSize: 24 }}>{value}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: 6 }}>
+          <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse', background: 'var(--bg-secondary)' }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-tertiary)' }}>
+                {['数据中心', '原始候选', '工作站已登记', '已导入 CVI', '分类 output 目录', '病种分类', '当前接入状态'].map(label => (
+                  <th key={label} style={{ padding: '11px 12px', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)', textAlign: 'left', whiteSpace: 'nowrap' }}>{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {inventory.items.map(item => (
+                <tr key={item.dataset}>
+                  <td style={inventoryCellStyle}><strong>{item.label}</strong><div style={inventoryMetaStyle}>{item.dataset}</div></td>
+                  <td style={inventoryCellStyle}>{item.raw_candidate_count}<div style={inventoryMetaStyle}>{item.raw_count_basis}</div></td>
+                  <td style={inventoryCellStyle}>{item.catalog_count}<div style={inventoryMetaStyle}>其中 DICOM {item.dicom_case_count}</div></td>
+                  <td style={inventoryCellStyle}>{item.imported_count}</td>
+                  <td style={inventoryCellStyle}>{item.classified_output_count}</td>
+                  <td style={inventoryCellStyle}>{item.classification_label}</td>
+                  <td style={inventoryCellStyle}>
+                    <span style={{ ...inventoryStatusStyle, ...(item.access_status === 'browsable' ? inventoryStatusOkStyle : inventoryStatusPendingStyle) }}>{item.access_label}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 16, padding: '12px 14px', borderLeft: '3px solid var(--accent-gold)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)', lineHeight: 1.75 }}>
+          <strong style={{ color: 'var(--text-primary)' }}>计数口径</strong>
+          {Object.entries(inventory.count_definitions).map(([key, value]) => <div key={key}>{value}</div>)}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -380,6 +508,25 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
               }}
             />
           </div>
+          <button
+            type="button"
+            onClick={() => setSelectedCase(null)}
+            style={{
+              width: '100%',
+              marginTop: 10,
+              padding: '8px 10px',
+              border: '1px solid var(--border-color)',
+              borderRadius: 4,
+              color: selectedCase ? 'var(--text-secondary)' : 'var(--accent-gold)',
+              background: selectedCase ? 'transparent' : 'rgba(217, 119, 6, 0.08)',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontWeight: 600,
+            }}
+          >
+            多中心接入总览
+          </button>
+          {error && <div style={{ marginTop: 10, color: 'var(--error-color)', fontSize: 12 }}>{error}</div>}
         </div>
         
         <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -411,14 +558,45 @@ const HospitalDiseaseBrowserPage: React.FC = () => {
             )}
           </div>
         ) : (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-tertiary)', flexDirection: 'column' }}>
-            <FaUserMd size={48} style={{ marginBottom: '16px', opacity: 0.2 }} />
-            <p>Select a patient module from the sidebar</p>
-          </div>
+          renderInventoryOverview()
         )}
       </div>
     </div>
   );
+};
+
+const inventoryCellStyle: React.CSSProperties = {
+  padding: '11px 12px',
+  borderBottom: '1px solid var(--border-color)',
+  color: 'var(--text-primary)',
+  verticalAlign: 'top',
+};
+
+const inventoryMetaStyle: React.CSSProperties = {
+  marginTop: 3,
+  color: 'var(--text-tertiary)',
+  fontSize: 11,
+};
+
+const inventoryStatusStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  padding: '3px 7px',
+  borderRadius: 4,
+  border: '1px solid var(--border-color)',
+  fontSize: 12,
+  whiteSpace: 'nowrap',
+};
+
+const inventoryStatusOkStyle: React.CSSProperties = {
+  color: '#4f7d31',
+  borderColor: 'rgba(79, 125, 49, 0.35)',
+  background: 'rgba(79, 125, 49, 0.08)',
+};
+
+const inventoryStatusPendingStyle: React.CSSProperties = {
+  color: 'var(--accent-gold)',
+  borderColor: 'rgba(217, 119, 6, 0.35)',
+  background: 'rgba(217, 119, 6, 0.08)',
 };
 
 export default HospitalDiseaseBrowserPage;

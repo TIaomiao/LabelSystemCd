@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import io
 import json
+import csv
 import hmac
 import hashlib
 import re
@@ -18,7 +19,7 @@ from threading import Lock
 from flask import Response, abort, current_app, jsonify, request, send_from_directory
 from flask_login import current_user, login_required
 from PIL import Image, ImageDraw, ImageFont
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import load_only
 
 from extensions import db
@@ -66,6 +67,7 @@ CVI_MEDIA_BROWSER_MAX_AGE = _int_env("LABELSYSTEM_CVI_IMAGE_BROWSER_MAX_AGE", 30
 CVI_MEDIA_CACHE_LOCK = Lock()
 CVI_MEDIA_CACHE_BYTES = 0
 CVI_MEDIA_RESPONSE_CACHE: OrderedDict[str, tuple[int, dict[str, str], bytes]] = OrderedDict()
+CASE_MANIFEST_CACHE: dict[str, tuple[int, dict]] = {}
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -314,9 +316,7 @@ def _user_can_access_case(namespace: str, dataset: str, case_id: str) -> bool:
     dataset = dataset or ""
     normalized_case_id = _normalized_case_id(case_id)
     if namespace == "functional" and dataset == "CMR_ALL":
-        report_case_names = {_normalized_case_id(item) for item in _eval_report_case_ids("CMR_ALL")}
-        if normalized_case_id in report_case_names:
-            return True
+        return True
     raw_case_id = str(case_id or "").strip()
     return CaseAssignment.query.filter_by(
         namespace=namespace,
@@ -502,7 +502,7 @@ def _is_hidden(path: Path) -> bool:
 def _looks_like_dicom(filename: str) -> bool:
     name = filename.strip()
     lower = name.lower()
-    if lower.endswith((".dcm", ".ima")):
+    if lower.endswith((".dcm", ".dic", ".ima")):
         return True
     if lower == "dicomdir":
         return False
@@ -676,6 +676,9 @@ def _source_roots() -> list[dict]:
                 "label": str(item.get("label") or dataset_name),
                 "path": root_path,
                 "case_dir_contains_dicoms": bool(item.get("case_dir_contains_dicoms")),
+                "case_dir_depth": item.get("case_dir_depth"),
+                "case_id_manifest": item.get("case_id_manifest"),
+                "case_id_prefix": item.get("case_id_prefix"),
             }
         )
 
@@ -803,6 +806,16 @@ def _cvi_library_options() -> list[dict]:
                     "case_ids": report100_case_ids,
                 },
             )
+            options.insert(
+                1 if options else 0,
+                {
+                    "value": "functional::CMR_ALL::all",
+                    "label": "昆医附二院全部病例",
+                    "root": str(root_path),
+                    "source": "functional",
+                    "dataset_filters": ["CMR_ALL"],
+                },
+            )
             if not is_admin and user_case_ids:
                 options.append(
                     {
@@ -876,7 +889,116 @@ def _parse_catalog_source_selection(source_value: str) -> dict | None:
     return None
 
 
-def _iter_case_dirs(source_filter: str = "all"):
+def _manifest_case_id(sequence: str, prefix: str) -> str:
+    if sequence.isdigit():
+        return f"{prefix}{int(sequence):04d}"
+    if prefix and sequence.startswith(prefix) and sequence[len(prefix):].isdigit():
+        return f"{prefix}{int(sequence[len(prefix):]):04d}"
+    return ""
+
+
+def _case_manifest_index(dataset_item: dict) -> dict:
+    manifest_text = str(dataset_item.get("case_id_manifest") or "").strip()
+    if not manifest_text:
+        return {"relative_to_case_id": {}, "case_id_to_record": {}}
+
+    manifest_path = Path(manifest_text).expanduser()
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Case ID manifest is unavailable for {dataset_item['dataset']}")
+
+    cache_key = str(manifest_path.resolve())
+    modified_ns = manifest_path.stat().st_mtime_ns
+    cached = CASE_MANIFEST_CACHE.get(cache_key)
+    if cached and cached[0] == modified_ns:
+        return cached[1]
+
+    prefix = str(dataset_item.get("case_id_prefix") or "").strip()
+    relative_to_case_id: dict[str, str] = {}
+    case_id_to_record: dict[str, dict[str, str]] = {}
+    try:
+        with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                relative_dir = str(row.get("source_relative_dir") or "").strip()
+                sequence = str(row.get("case_sequence") or "").strip()
+                case_id = _manifest_case_id(sequence, prefix)
+                if not case_id:
+                    continue
+                if not relative_dir:
+                    continue
+                relative_to_case_id[Path(relative_dir).as_posix()] = case_id
+                case_id_to_record[case_id] = {
+                    "patient_id": str(row.get("patient_id") or "").strip(),
+                    "accession_number": str(row.get("accession_number") or "").strip(),
+                    "study_id": str(row.get("study_id") or "").strip(),
+                    "study_instance_uid": str(row.get("study_instance_uid") or "").strip(),
+                }
+    except OSError as exc:
+        raise RuntimeError(f"Could not read case ID manifest for {dataset_item['dataset']}") from exc
+
+    if not relative_to_case_id:
+        raise RuntimeError(f"Case ID manifest has no usable Study mappings for {dataset_item['dataset']}")
+    index = {
+        "relative_to_case_id": relative_to_case_id,
+        "case_id_to_record": case_id_to_record,
+    }
+    CASE_MANIFEST_CACHE[cache_key] = (modified_ns, index)
+    return index
+
+
+def _case_id_manifest_map(dataset_item: dict) -> dict[str, str]:
+    return _case_manifest_index(dataset_item)["relative_to_case_id"]
+
+
+def _configured_dataset_item(dataset: str) -> dict | None:
+    canonical = _canonical_dataset(dataset)
+    for item in _configured_functional_datasets():
+        if _canonical_dataset(item.get("dataset")) == canonical:
+            return item
+    return None
+
+
+def _manifest_search_matches(dataset_filters: list[str] | None, search: str) -> dict[str, set[str]]:
+    needle = str(search or "").strip().casefold()
+    if not needle:
+        return {}
+    selected = {_canonical_dataset(item) for item in (dataset_filters or [])}
+    matches: dict[str, set[str]] = {}
+    for dataset_item in _configured_functional_datasets():
+        dataset = str(dataset_item.get("dataset") or "")
+        if selected and _canonical_dataset(dataset) not in selected:
+            continue
+        if not dataset_item.get("case_id_manifest"):
+            continue
+        case_matches = set()
+        for case_id, record in _case_manifest_index(dataset_item)["case_id_to_record"].items():
+            values = [case_id, *record.values()]
+            if any(needle in value.casefold() for value in values if value):
+                case_matches.add(case_id)
+        if case_matches:
+            matches[dataset] = case_matches
+    return matches
+
+
+def _iter_dirs_at_depth(root: Path, depth: int):
+    if depth < 1:
+        return
+    try:
+        children = sorted(
+            [child for child in root.iterdir() if child.is_dir() and not _is_hidden(child)],
+            key=lambda path: path.name.lower(),
+        )
+    except OSError:
+        return
+
+    if depth == 1:
+        yield from children
+        return
+
+    for child in children:
+        yield from _iter_dirs_at_depth(child, depth - 1)
+
+
+def _iter_case_dirs(source_filter: str = "all", dataset_filters: list[str] | None = None):
     yielded = 0
     for item in _source_roots():
         if source_filter != "all" and item["source"] != source_filter:
@@ -884,7 +1006,26 @@ def _iter_case_dirs(source_filter: str = "all"):
         dataset_roots = item.get("datasets") or []
         if dataset_roots:
             for dataset_item in dataset_roots:
+                if dataset_filters and dataset_item["dataset"] not in dataset_filters:
+                    continue
                 dataset_dir: Path = dataset_item["path"]
+                configured_depth = dataset_item.get("case_dir_depth")
+                if configured_depth is not None:
+                    try:
+                        case_dir_depth = int(configured_depth)
+                    except (TypeError, ValueError):
+                        raise RuntimeError(f"Invalid case directory depth for {dataset_item['dataset']}")
+                    case_id_map = _case_id_manifest_map(dataset_item)
+                    for case_dir in _iter_dirs_at_depth(dataset_dir, case_dir_depth):
+                        relative_case_id = case_dir.relative_to(dataset_dir).as_posix()
+                        case_id = case_id_map.get(relative_case_id)
+                        if not case_id:
+                            continue
+                        yielded += 1
+                        if yielded > CASE_SCAN_LIMIT:
+                            return
+                        yield item["source"], dataset_item["dataset"], case_id, case_dir
+                    continue
                 case_dirs = sorted(
                     [child for child in dataset_dir.iterdir() if child.is_dir() and not _is_hidden(child)],
                     key=lambda path: path.name.lower(),
@@ -944,7 +1085,7 @@ def _iter_case_dirs(source_filter: str = "all"):
                 yield item["source"], item["dataset"], case_dir.name, case_dir
 
 
-def _refresh_case_catalog(source_filter: str = "all") -> int:
+def _refresh_case_catalog(source_filter: str = "all", dataset_filters: list[str] | None = None) -> int:
     now = datetime.utcnow()
     updated = 0
     seen_keys: set[tuple[str, str, str]] = set()
@@ -953,7 +1094,7 @@ def _refresh_case_catalog(source_filter: str = "all") -> int:
         for item in _source_roots()
         if source_filter == "all" or item["source"] == source_filter
     }
-    for source, dataset, case_id, case_path in _iter_case_dirs(source_filter):
+    for source, dataset, case_id, case_path in _iter_case_dirs(source_filter, dataset_filters):
         scan_path = _resolve_dicom_case_path(dataset, case_id, case_path)
         seen_keys.add((source, dataset, case_id))
         sequences, dicom_count, has_dicom = _sequence_summary(scan_path)
@@ -971,7 +1112,10 @@ def _refresh_case_catalog(source_filter: str = "all") -> int:
         updated += 1
 
     if affected_sources:
-        stale_cases = CviCaseCatalog.query.filter(CviCaseCatalog.source.in_(sorted(affected_sources))).all()
+        stale_query = CviCaseCatalog.query.filter(CviCaseCatalog.source.in_(sorted(affected_sources)))
+        if dataset_filters:
+            stale_query = stale_query.filter(CviCaseCatalog.dataset.in_(dataset_filters))
+        stale_cases = stale_query.all()
         for stale_case in stale_cases:
             key = (stale_case.source, stale_case.dataset, stale_case.case_id)
             if key in seen_keys:
@@ -982,10 +1126,9 @@ def _refresh_case_catalog(source_filter: str = "all") -> int:
     return updated
 
 
-def _query_catalog(
+def _catalog_query(
     source: str,
     search: str,
-    limit: int,
     dataset_filters: list[str] | None = None,
     case_ids: list[str] | None = None,
 ):
@@ -1001,13 +1144,30 @@ def _query_catalog(
         query = query.filter(CviCaseCatalog.case_id.in_(case_names))
     if search:
         pattern = f"%{search}%"
-        query = query.filter(
-            or_(
-                CviCaseCatalog.case_id.ilike(pattern),
-                CviCaseCatalog.dataset.ilike(pattern),
-                CviCaseCatalog.full_id.ilike(pattern),
+        predicates = [
+            CviCaseCatalog.case_id.ilike(pattern),
+            CviCaseCatalog.dataset.ilike(pattern),
+            CviCaseCatalog.full_id.ilike(pattern),
+        ]
+        for dataset, matching_case_ids in _manifest_search_matches(dataset_filters, search).items():
+            predicates.append(
+                and_(
+                    CviCaseCatalog.dataset == dataset,
+                    CviCaseCatalog.case_id.in_(sorted(matching_case_ids)),
+                )
             )
-        )
+        query = query.filter(or_(*predicates))
+    return query
+
+
+def _query_catalog(
+    source: str,
+    search: str,
+    limit: int,
+    dataset_filters: list[str] | None = None,
+    case_ids: list[str] | None = None,
+):
+    query = _catalog_query(source, search, dataset_filters, case_ids)
     rows = query.order_by(CviCaseCatalog.dataset.asc(), CviCaseCatalog.case_id.asc()).all()
     if case_ids is not None:
         order = {Path(str(case_id)).name: index for index, case_id in enumerate(case_ids)}
@@ -1016,14 +1176,40 @@ def _query_catalog(
 
 
 
+def _registration_id_from_case_id(case_id: str) -> str:
+    match = re.search(r"(?<!\d)(\d{10})(?!\d)", case_id or "")
+    return match.group(1) if match else ""
+
+
 def _public_case_code(case_id: str) -> str:
-    match = re.search(r"(\d{10})[^\d]+(20\d{6})", case_id or "")
-    if match:
-        return f"{match.group(1)}_{match.group(2)}"
-    match = re.search(r"(\d{10}).*?(20\d{6})", case_id or "")
-    if match:
-        return f"{match.group(1)}_{match.group(2)}"
+    registration_id = _registration_id_from_case_id(case_id)
+    date_match = re.search(r"(?<!\d)(20\d{6})(?!\d)", case_id or "")
+    if registration_id and date_match:
+        return f"{registration_id}_{date_match.group(1)}"
     return re.sub(r"[A-Za-z][A-Za-z\s_-]*$", "", case_id or "").strip("_- /") or "-"
+
+
+def _case_display_identity(dataset: str, case_id: str) -> dict[str, str]:
+    if _canonical_dataset(dataset) == "CMR_ALL":
+        registration_id = _registration_id_from_case_id(case_id)
+        if registration_id:
+            return {
+                "primary_id_label": "登记号",
+                "primary_id": registration_id,
+            }
+    dataset_item = _configured_dataset_item(dataset)
+    if dataset_item and dataset_item.get("case_id_manifest"):
+        record = _case_manifest_index(dataset_item)["case_id_to_record"].get(case_id, {})
+        registration_id = str(record.get("patient_id") or "").strip()
+        if registration_id:
+            return {
+                "primary_id_label": "登记号",
+                "primary_id": registration_id,
+            }
+    return {
+        "primary_id_label": "",
+        "primary_id": "",
+    }
 
 
 def _catalog_payload(selection: dict, search: str, limit: int, refreshed: int = 0) -> dict:
@@ -1044,10 +1230,17 @@ def _catalog_payload(selection: dict, search: str, limit: int, refreshed: int = 
         item["report_set_order"] = original_index + 1 if case_ids is not None else None
         item["anon_label"] = f"病例{original_index + 1:03d}" if case_ids is not None else f"病例{len(items) + 1:03d}"
         item["public_case_code"] = _public_case_code(case.case_id)
+        item.update(_case_display_identity(case.dataset, case.case_id))
         items.append(item)
     return {
         "items": items,
         "count": len(items),
+        "total_count": _catalog_query(
+            selection["query_source"],
+            search,
+            dataset_filters=selection.get("dataset_filters"),
+            case_ids=case_ids,
+        ).count(),
         "refreshed": refreshed,
         "sources": _cvi_library_options(),
     }
@@ -1128,6 +1321,28 @@ def _annotation_snapshot(user_id: int, items: list[dict]) -> dict[tuple[str, str
     return snapshot
 
 
+def _cvi_annotation_snapshot(items: list[dict]) -> dict[int, dict]:
+    study_ids = sorted({int(item["cvi_study_id"]) for item in items if item.get("cvi_study_id")})
+    if not study_ids:
+        return {}
+    query = urllib.parse.urlencode({"study_ids": ",".join(str(study_id) for study_id in study_ids)})
+    status, payload = _json_request(f"/studies/annotation-summaries?{query}")
+    if status != 200:
+        return {}
+    raw_items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(raw_items, dict):
+        return {}
+    snapshot = {}
+    for raw_study_id, summary in raw_items.items():
+        try:
+            study_id = int(raw_study_id)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(summary, dict):
+            snapshot[study_id] = summary
+    return snapshot
+
+
 def _verify_cvi_study(study_id: int | None) -> bool:
     if not study_id:
         return False
@@ -1157,31 +1372,43 @@ def register_cvi_workstation_routes(app) -> None:
             return jsonify({"error": "Unknown annotation status"}), 400
 
         query_source = selection["query_source"]
-        existing_count = (
-            CviCaseCatalog.query.count()
-            if query_source == "all"
-            else CviCaseCatalog.query.filter_by(source=query_source).count()
-        )
+        existing_query = CviCaseCatalog.query
+        if query_source != "all":
+            existing_query = existing_query.filter_by(source=query_source)
+        if selection["dataset_filters"]:
+            existing_query = existing_query.filter(CviCaseCatalog.dataset.in_(selection["dataset_filters"]))
+        existing_count = existing_query.count()
         refreshed = 0
         if refresh or existing_count == 0:
-            refreshed = _refresh_case_catalog(selection["scan_source"])
+            refreshed = _refresh_case_catalog(selection["scan_source"], selection["dataset_filters"])
         payload = _catalog_payload(selection, search, limit, refreshed)
         payload["source"] = source
         review_user_id = _review_target_user_id()
         snapshot = _annotation_snapshot(review_user_id, payload["items"])
+        cvi_snapshot = _cvi_annotation_snapshot(payload["items"])
         filtered_items = []
         for item in payload["items"]:
             summary = snapshot.get((_canonical_dataset(item["dataset"]), item["case_id"]), {})
-            completed_modules = sorted(summary.get("completed_modules", []))
+            cvi_summary = cvi_snapshot.get(int(item["cvi_study_id"]), {}) if item.get("cvi_study_id") else {}
+            completed_modules = sorted(set(summary.get("completed_modules", [])) | set(cvi_summary.get("completed_modules", [])))
+            latest_values = [
+                value
+                for value in (summary.get("latest_annotation_at"), cvi_summary.get("latest_annotation_at"))
+                if value
+            ]
+            annotated_frame_count = int(cvi_summary.get("annotated_frame_count") or 0)
+            is_annotated = bool(completed_modules) or annotated_frame_count > 0
             item["annotation_summary"] = {
-                "is_annotated": bool(completed_modules),
+                "is_annotated": is_annotated,
                 "completed_modules": completed_modules,
                 "completed_count": len(completed_modules),
-                "latest_annotation_at": summary.get("latest_annotation_at"),
+                "annotated_series_count": int(cvi_summary.get("annotated_series_count") or 0),
+                "annotated_frame_count": annotated_frame_count,
+                "latest_annotation_at": max(latest_values) if latest_values else None,
             }
-            if annotation_status == "annotated" and not completed_modules:
+            if annotation_status == "annotated" and not is_annotated:
                 continue
-            if annotation_status == "pending" and completed_modules:
+            if annotation_status == "pending" and is_annotated:
                 continue
             filtered_items.append(item)
         payload["items"] = filtered_items

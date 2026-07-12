@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 from skimage.draw import ellipse, polygon2mask
 from skimage.exposure import equalize_adapthist, rescale_intensity
-from skimage.measure import find_contours
+from skimage.measure import find_contours, label, regionprops
 from skimage.morphology import binary_closing, binary_opening, disk, remove_small_objects
 from skimage.registration import optical_flow_tvl1, phase_cross_correlation
 from skimage.transform import AffineTransform, warp
@@ -37,9 +37,9 @@ class PropagationError(RuntimeError):
     pass
 
 
-FUNCTION_PROPAGATION_KEYS = ("endo", "epi", "rv", "fat", "la", "ra")
+FUNCTION_PROPAGATION_KEYS = ("endo", "epi", "ventricular_epi", "rv", "fat", "fat_outer", "exclude", "la", "ra")
 LGE_PROPAGATION_KEYS = ("endo", "epi", "remote", "enhanced", "exclude", "mvo")
-FUNCTION_OBJECT_MAP = {1: "endo", 2: "epi", 3: "rv", 4: "fat", 5: "la", 6: "ra"}
+FUNCTION_OBJECT_MAP = {1: "endo", 2: "epi", 3: "ventricular_epi", 4: "rv", 5: "fat", 6: "fat_outer", 7: "exclude", 8: "la", 9: "ra"}
 LGE_OBJECT_MAP = {1: "endo", 2: "epi", 3: "remote", 4: "enhanced", 5: "exclude", 6: "mvo"}
 
 PROPAGATION_METHODS = {"optical_flow", "phase_correlation", "hybrid", "rigid", "affine"}
@@ -100,6 +100,20 @@ def _mask_to_polygon(mask: np.ndarray | None, frame: dict) -> dict | None:
     return {"points": points, "closed": True}
 
 
+def _mask_to_polygons(mask: np.ndarray | None, frame: dict) -> list[dict]:
+    if mask is None or int(mask.sum()) < 24:
+        return []
+    labeled = label(mask.astype(bool))
+    polygons: list[dict] = []
+    for region in regionprops(labeled):
+        if int(region.area) < 24:
+            continue
+        polygon = _mask_to_polygon(labeled == region.label, frame)
+        if polygon is not None:
+            polygons.append(polygon)
+    return polygons
+
+
 def _contour_to_mask(contour: dict | None, shape: tuple[int, int]) -> np.ndarray | None:
     if not contour:
         return None
@@ -112,6 +126,20 @@ def _contour_to_mask(contour: dict | None, shape: tuple[int, int]) -> np.ndarray
     mask = binary_opening(mask, disk(1))
     mask = remove_small_objects(mask.astype(bool), 16)
     return mask.astype(bool)
+
+
+def _exclude_to_mask(frame_payload: dict | None, shape: tuple[int, int]) -> np.ndarray | None:
+    if not isinstance(frame_payload, dict):
+        return None
+    raw_regions = frame_payload.get("exclude_regions")
+    if isinstance(raw_regions, list):
+        union_mask = np.zeros(shape, dtype=bool)
+        for contour in raw_regions:
+            mask = _contour_to_mask(contour, shape)
+            if mask is not None:
+                union_mask |= mask
+        return union_mask if int(union_mask.sum()) > 0 else None
+    return _contour_to_mask(frame_payload.get("exclude"), shape)
 
 
 def _frame_shape(frame: dict) -> tuple[int, int]:
@@ -142,7 +170,10 @@ def _contour_has_points(contour: dict | None) -> bool:
 def _frame_has_any_contours(frame_payload: dict | None, module: str) -> bool:
     if not frame_payload:
         return False
-    return any(_contour_has_points(frame_payload.get(key)) for key in _module_keys(module))
+    if any(_contour_has_points(frame_payload.get(key)) for key in _module_keys(module)):
+        return True
+    raw_regions = frame_payload.get("exclude_regions")
+    return isinstance(raw_regions, list) and any(_contour_has_points(region) for region in raw_regions)
 
 
 def _frame_to_masks(frame_payload: dict | None, frame: dict, module: str) -> dict[str, np.ndarray]:
@@ -151,7 +182,7 @@ def _frame_to_masks(frame_payload: dict | None, frame: dict, module: str) -> dic
     shape = _frame_shape(frame)
     masks: dict[str, np.ndarray] = {}
     for key in _module_keys(module):
-        mask = _contour_to_mask(frame_payload.get(key), shape)
+        mask = _exclude_to_mask(frame_payload, shape) if key == "exclude" else _contour_to_mask(frame_payload.get(key), shape)
         if mask is not None and int(mask.sum()) > 0:
             masks[key] = mask
     if "endo" in masks and "epi" in masks:
@@ -254,7 +285,7 @@ def _union_source_mask(source_masks: dict[str, np.ndarray]) -> np.ndarray | None
     if not source_masks:
         return None
     union_mask = None
-    for key in ("epi", "endo", "la", "ra", "rv", "fat", "remote", "enhanced", "exclude", "mvo"):
+    for key in ("epi", "ventricular_epi", "endo", "la", "ra", "rv", "fat", "fat_outer", "remote", "enhanced", "exclude", "mvo"):
         mask = source_masks.get(key)
         if mask is None or int(mask.sum()) <= 0:
             continue
@@ -362,7 +393,7 @@ def _apply_shape_prior(
     if not masks:
         return {}
     constrained: dict[str, np.ndarray] = {}
-    ellipse_keys = {"endo", "epi", "la", "ra", "fat"}
+    ellipse_keys = {"endo", "epi", "ventricular_epi", "la", "ra", "fat", "fat_outer"}
     for key, mask in masks.items():
         next_mask = mask.astype(bool)
         if key in ellipse_keys:
@@ -520,6 +551,13 @@ def _merge_frame_payload(existing: dict | None, propagated_masks: dict[str, np.n
     changed = False
     for key in _module_keys(module):
         if key in propagated_masks:
+            if key == "exclude":
+                regions = _mask_to_polygons(propagated_masks[key], frame)
+                if regions:
+                    next_payload["exclude_regions"] = regions
+                    next_payload["exclude"] = regions[0]
+                    changed = True
+                continue
             polygon = _mask_to_polygon(propagated_masks[key], frame)
             if polygon is not None:
                 next_payload[key] = polygon

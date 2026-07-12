@@ -47,6 +47,7 @@ app.config['DATA_ROOT'] = '/home/Larry/data/CMR_SCS'
 app.config['EVAL_ROOT'] = '/home/Larry/code/Ziqiu/MRIAgent/src/output'
 app.config['CMR_ALL_REPORT100_CASE_LIST'] = '/home/Larry/code/Ziqiu/LabelSystem/tmp/km_replacement_strict2025_latest_correctroot_relative_paths.txt'
 app.config['FUNCTIONAL_DATA_ROOT'] = '/home/Larry/code/Ziqiu/MRIAgent/data'
+_multicenter_data_root = os.path.dirname(app.config['DATA_ROOT'])
 app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
     {
         'dataset': 'CMR_ALL',
@@ -62,6 +63,19 @@ app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
         'dataset': 'CMR_SCS',
         'label': '四川省人民医院',
         'path': '/home/Larry/data/CMR_SCS',
+    },
+    {
+        'dataset': 'CMR_SCS_2',
+        'label': '四川省人民医院-补充数据',
+        'path': os.environ.get('CMR_SCS_2_ROOT', os.path.join(_multicenter_data_root, 'CMR_SCS_2')),
+        # The source has two grouping levels before each actual Study directory.
+        'case_dir_depth': 3,
+        # Keep raw directory identities out of the workstation catalogue.
+        'case_id_manifest': os.environ.get(
+            'CMR_SCS_2_CASE_ID_MANIFEST',
+            os.path.join(_multicenter_data_root, 'CMR_SCS_2_workstation_intake', 'study_import_queue_private.csv'),
+        ),
+        'case_id_prefix': 'SCS2-',
     },
     {
         'dataset': 'CMR_YA',

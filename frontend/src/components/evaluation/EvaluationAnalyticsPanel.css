@@ -1,0 +1,19 @@
+.evaluation-analytics-panel {
+  color: #f1f1f1;
+  font-family: "Segoe UI Variable", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+.evaluation-analytics-panel__header > div > div:first-child { color: #f1f1f1 !important; }
+.evaluation-analytics-panel__header > div > div:nth-child(2) { color: #b9b9b9 !important; }
+.evaluation-analytics-panel__button:hover {
+  border-color: rgba(168, 203, 78, 0.56) !important;
+  background: rgba(168, 203, 78, 0.12) !important;
+}
+.evaluation-analytics-panel__metrics > .evaluation-analytics-panel__metric > div:first-child,
+.evaluation-analytics-panel__rater [style*="rgba(148,163,184"] { color: #b9b9b9 !important; }
+.evaluation-analytics-panel__metric,
+.evaluation-analytics-panel__rater { box-shadow: none !important; }
+
+@media (max-width: 760px) {
+  .evaluation-analytics-panel__header { align-items: flex-start !important; flex-direction: column; }
+}

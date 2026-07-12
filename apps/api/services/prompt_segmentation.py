@@ -346,8 +346,22 @@ def apply_prompt_segmentation(series_id: int, prompt: PromptSegmentationRequest,
     }
     frame_key = _frame_key(prompt.slice_index, 0 if prompt.module == "lge" else prompt.phase_index)
     frame_payload = dict(existing["frames"].get(frame_key) or {"include": True})
-    frame_payload[prompt.contour_key] = contour
+    if prompt.contour_key == "exclude":
+        raw_regions = frame_payload.get("exclude_regions")
+        if isinstance(raw_regions, list):
+            regions = [region for region in raw_regions if isinstance(region, dict) and region.get("points")]
+        elif isinstance(frame_payload.get("exclude"), dict) and frame_payload["exclude"].get("points"):
+            regions = [frame_payload["exclude"]]
+        else:
+            regions = []
+        regions.append(contour)
+        frame_payload["exclude_regions"] = regions
+        frame_payload["exclude"] = regions[0] if regions else None
+    else:
+        frame_payload[prompt.contour_key] = contour
     frame_payload.setdefault("fat", None)
+    frame_payload.setdefault("fat_outer", None)
+    frame_payload.setdefault("ventricular_epi", None)
     existing["frames"][frame_key] = frame_payload
     existing["source"] = "manual+edgetam-prompt"
     existing.setdefault("settings", {})

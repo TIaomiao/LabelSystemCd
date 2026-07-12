@@ -24,6 +24,23 @@ from .propagation_runner import run_propagation_inference
 logger = logging.getLogger(__name__)
 
 
+CONTOUR_VALIDATION_KEYS = (
+    "la",
+    "ra",
+    "endo",
+    "epi",
+    "ventricular_epi",
+    "rv",
+    "fat",
+    "fat_outer",
+    "remote",
+    "enhanced",
+    "exclude",
+    "mvo",
+)
+EXCLUDE_REGIONS_KEY = "exclude_regions"
+
+
 @dataclass
 class SeriesContext:
     series: dict
@@ -103,8 +120,10 @@ class FastHeuristicAdapter:
                     "include": True,
                     "endo": _mask_to_polygon(lv_mask, frame),
                     "epi": _mask_to_polygon(epi_mask, frame),
+                    "ventricular_epi": None,
                     "rv": _mask_to_polygon(rv_mask, frame) if rv_mask is not None else None,
                     "fat": None,
+                    "fat_outer": None,
                     "remote": None,
                     "enhanced": None,
                     "exclude": None,
@@ -144,8 +163,10 @@ class FastHeuristicAdapter:
                 "include": True,
                 "endo": _mask_to_polygon(lv_mask, reference_frame),
                 "epi": _mask_to_polygon(epi_mask, reference_frame),
+                "ventricular_epi": None,
                 "rv": None,
                 "fat": None,
+                "fat_outer": None,
                 "remote": None,
                 "enhanced": None,
                 "exclude": None,
@@ -223,6 +244,20 @@ def _origin_label(origin: str) -> str:
     return labels.get(origin, origin or "未知")
 
 
+def _payload_has_propagation_history(payload: dict) -> bool:
+    source = str(payload.get("source") or "").lower()
+    if "propagat" in source or "neighbor" in source or "edgetam" in source or "optical-flow" in source:
+        return True
+    settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
+    backend = str(settings.get("backend") or "").lower()
+    if "propagat" in backend or "edgetam" in backend or "optical" in backend:
+        return True
+    return any(
+        key in settings
+        for key in ("propagation", "propagation_axes", "neighbor_propagation", "seed_frame_count")
+    )
+
+
 def _actor_meta(actor: dict | None) -> dict:
     actor = actor or {}
     return {
@@ -234,6 +269,63 @@ def _actor_meta(actor: dict | None) -> dict:
 
 def _payload_signature(value: dict | None) -> str:
     return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _contour_has_points(contour: dict | None) -> bool:
+    if not isinstance(contour, dict):
+        return False
+    points = contour.get("points")
+    return isinstance(points, list) and len(points) >= 3
+
+
+def _exclude_regions_from_frame(frame_payload: dict | None) -> list[dict]:
+    if not isinstance(frame_payload, dict):
+        return []
+    raw_regions = frame_payload.get(EXCLUDE_REGIONS_KEY)
+    if isinstance(raw_regions, list):
+        return [region for region in raw_regions if _contour_has_points(region)]
+    legacy_exclude = frame_payload.get("exclude")
+    return [legacy_exclude] if _contour_has_points(legacy_exclude) else []
+
+
+def _normalize_frame_exclude_regions(frame_payload: dict) -> dict:
+    normalized = dict(frame_payload)
+    has_regions_field = EXCLUDE_REGIONS_KEY in normalized
+    regions = _exclude_regions_from_frame(normalized)
+    if has_regions_field or regions:
+        normalized[EXCLUDE_REGIONS_KEY] = regions
+        normalized["exclude"] = regions[-1] if regions else None
+    return normalized
+
+
+def _preserve_exclude_regions_for_legacy_save(existing: dict | None, incoming: dict) -> dict:
+    existing_frames = existing.get("frames") if isinstance(existing, dict) else None
+    incoming_frames = incoming.get("frames") if isinstance(incoming, dict) else None
+    if not isinstance(existing_frames, dict) or not isinstance(incoming_frames, dict):
+        return incoming
+
+    preserved = dict(incoming)
+    next_frames = dict(incoming_frames)
+    for frame_key, frame_payload in incoming_frames.items():
+        if not isinstance(frame_payload, dict):
+            continue
+        next_frame = dict(frame_payload)
+        raw_regions = next_frame.get(EXCLUDE_REGIONS_KEY)
+        if isinstance(raw_regions, list):
+            next_frames[frame_key] = _normalize_frame_exclude_regions(next_frame)
+            continue
+        if _contour_has_points(next_frame.get("exclude")):
+            next_frame[EXCLUDE_REGIONS_KEY] = [next_frame["exclude"]]
+            next_frames[frame_key] = _normalize_frame_exclude_regions(next_frame)
+            continue
+        existing_regions = _exclude_regions_from_frame(existing_frames.get(frame_key))
+        if existing_regions:
+            next_frame[EXCLUDE_REGIONS_KEY] = existing_regions
+            next_frame["exclude"] = existing_regions[-1]
+        next_frames[frame_key] = next_frame
+
+    preserved["frames"] = next_frames
+    return preserved
 
 
 PHASE_LABEL_SETTING_KEYS = (
@@ -369,10 +461,18 @@ def _normalize_contour_payload(
     payload = _resolve_cached_phase_labels(payload)
     top_meta = _build_top_meta(payload, stored_updated_at=stored_updated_at, actor=actor)
     payload["annotation_meta"] = top_meta
-    frame_meta = dict(payload.get("frame_meta") or {})
+    raw_frame_meta = payload.get("frame_meta")
+    has_explicit_frame_meta = isinstance(raw_frame_meta, dict) and bool(raw_frame_meta)
+    frame_meta = dict(raw_frame_meta or {})
     default_frame_time = top_meta.get("updated_at") or stored_updated_at or utcnow()
     default_origin = top_meta.get("origin") or _normalize_origin(payload.get("source"), "legacy")
+    infer_legacy_propagation_origin = not has_explicit_frame_meta and _payload_has_propagation_history(payload)
+    if infer_legacy_propagation_origin:
+        default_origin = "propagate"
     for frame_key in list(payload["frames"].keys()):
+        frame_payload = payload["frames"].get(frame_key)
+        if isinstance(frame_payload, dict):
+            payload["frames"][frame_key] = _normalize_frame_exclude_regions(frame_payload)
         item = dict(frame_meta.get(frame_key) or {})
         item.setdefault("created_at", default_frame_time)
         item.setdefault("updated_at", default_frame_time)
@@ -380,7 +480,8 @@ def _normalize_contour_payload(
         item.setdefault("created_by_username", top_meta.get("created_by_username"))
         item.setdefault("updated_by_user_id", top_meta.get("updated_by_user_id"))
         item.setdefault("updated_by_username", top_meta.get("updated_by_username"))
-        origin = _normalize_origin(item.get("origin") or payload.get("source"), default_origin)
+        origin_source = item.get("origin") or (None if infer_legacy_propagation_origin else payload.get("source"))
+        origin = _normalize_origin(origin_source, default_origin)
         item["origin"] = origin
         item["origin_label"] = _origin_label(origin)
         item["legacy"] = bool(item.get("legacy", False) or top_meta.get("legacy", False) or origin == "legacy")
@@ -601,8 +702,10 @@ class FilesystemPredictionAdapter:
                 "include": True,
                 "endo": _mask_to_polygon(red, frame, scale_x, scale_y),
                 "epi": _mask_to_polygon(myocardium, frame, scale_x, scale_y),
+                "ventricular_epi": None,
                 "rv": None,
                 "fat": None,
+                "fat_outer": None,
                 "remote": _mask_to_polygon(green & ~blue, frame, scale_x, scale_y),
                 "enhanced": _mask_to_polygon(blue, frame, scale_x, scale_y),
                 "exclude": None,
@@ -657,8 +760,10 @@ class FilesystemPredictionAdapter:
                     "include": True,
                     "endo": _mask_to_polygon(lv_mask, frame),
                     "epi": _mask_to_polygon(epi_mask, frame),
+                    "ventricular_epi": None,
                     "rv": _mask_to_polygon(rv_mask, frame) if rv_mask is not None else None,
                     "fat": None,
+                    "fat_outer": None,
                     "remote": None,
                     "enhanced": None,
                     "exclude": None,
@@ -681,6 +786,119 @@ class FilesystemPredictionAdapter:
             "phase_labels": {"ed": ed_phase, "es": es_phase},
             "frames": contour_frames,
         }
+
+
+def _point_xy(point: dict | None) -> tuple[float, float] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        x = float(point["x"])
+        y = float(point["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return x, y
+
+
+def _contour_points(contour: dict | None) -> list[tuple[float, float]]:
+    if not isinstance(contour, dict):
+        return []
+    points = [_point_xy(point) for point in contour.get("points") or []]
+    clean = [point for point in points if point is not None]
+    if len(clean) > 1 and math.hypot(clean[0][0] - clean[-1][0], clean[0][1] - clean[-1][1]) <= 1e-6:
+        clean = clean[:-1]
+    return clean
+
+
+def _orientation(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _point_on_segment(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+    *,
+    eps: float = 1e-7,
+) -> bool:
+    return (
+        min(start[0], end[0]) - eps <= point[0] <= max(start[0], end[0]) + eps
+        and min(start[1], end[1]) - eps <= point[1] <= max(start[1], end[1]) + eps
+        and abs(_orientation(start, end, point)) <= eps
+    )
+
+
+def _segments_intersect(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+    *,
+    eps: float = 1e-7,
+) -> bool:
+    ab_c = _orientation(a, b, c)
+    ab_d = _orientation(a, b, d)
+    cd_a = _orientation(c, d, a)
+    cd_b = _orientation(c, d, b)
+    if ab_c * ab_d < -eps and cd_a * cd_b < -eps:
+        return True
+    return (
+        _point_on_segment(c, a, b, eps=eps)
+        or _point_on_segment(d, a, b, eps=eps)
+        or _point_on_segment(a, c, d, eps=eps)
+        or _point_on_segment(b, c, d, eps=eps)
+    )
+
+
+def _has_self_intersection(points: list[tuple[float, float]], closed: bool) -> bool:
+    if not closed or len(points) < 4:
+        return False
+    segment_count = len(points)
+    for index in range(segment_count):
+        a = points[index]
+        b = points[(index + 1) % segment_count]
+        if math.hypot(b[0] - a[0], b[1] - a[1]) <= 1e-6:
+            continue
+        for other_index in range(index + 1, segment_count):
+            if abs(index - other_index) <= 1:
+                continue
+            if index == 0 and other_index == segment_count - 1:
+                continue
+            c = points[other_index]
+            d = points[(other_index + 1) % segment_count]
+            if math.hypot(d[0] - c[0], d[1] - c[1]) <= 1e-6:
+                continue
+            if _segments_intersect(a, b, c, d):
+                return True
+    return False
+
+
+def _validate_contours_for_save(payload: dict) -> None:
+    frames = payload.get("frames") if isinstance(payload, dict) else None
+    if not isinstance(frames, dict):
+        return
+    for frame_key, frame_payload in frames.items():
+        if not isinstance(frame_payload, dict):
+            continue
+        for contour_key in CONTOUR_VALIDATION_KEYS:
+            if contour_key == "exclude" and isinstance(frame_payload.get(EXCLUDE_REGIONS_KEY), list):
+                continue
+            contour = frame_payload.get(contour_key)
+            if not isinstance(contour, dict) or contour.get("closed", True) is False:
+                continue
+            points = _contour_points(contour)
+            if _has_self_intersection(points, closed=True):
+                raise ValueError(f"轮廓 {frame_key}/{contour_key} 存在自交，请撤销或重画后再保存。")
+        raw_regions = frame_payload.get(EXCLUDE_REGIONS_KEY)
+        if not isinstance(raw_regions, list):
+            continue
+        for region_index, contour in enumerate(raw_regions):
+            if not isinstance(contour, dict) or contour.get("closed", True) is False:
+                continue
+            points = _contour_points(contour)
+            if _has_self_intersection(points, closed=True):
+                raise ValueError(f"轮廓 {frame_key}/exclude_regions[{region_index}] 存在自交，请撤销或重画后再保存。")
 
 
 def _upsert_contours(series_id: int, module: str, payload: dict) -> None:
@@ -714,8 +932,29 @@ def _preserve_axis_exclusions(existing: dict | None, payload: dict) -> dict:
     return payload
 
 
+_ALLOW_EMPTY_FRAMES_OVERWRITE_FLAG = "allow_empty_frames_overwrite"
+
+
+def _allows_empty_frames_overwrite(incoming: dict) -> bool:
+    settings = incoming.get("settings") if isinstance(incoming, dict) else None
+    return isinstance(settings, dict) and settings.get(_ALLOW_EMPTY_FRAMES_OVERWRITE_FLAG) is True
+
+
+def _strip_transient_save_flags(payload: dict) -> dict:
+    settings = payload.get("settings") if isinstance(payload, dict) else None
+    if not isinstance(settings, dict) or _ALLOW_EMPTY_FRAMES_OVERWRITE_FLAG not in settings:
+        return payload
+    cleaned = dict(payload)
+    cleaned_settings = dict(settings)
+    cleaned_settings.pop(_ALLOW_EMPTY_FRAMES_OVERWRITE_FLAG, None)
+    cleaned["settings"] = cleaned_settings
+    return cleaned
+
+
 def _is_empty_frames_overwrite(existing: dict | None, incoming: dict, action_origin: str | None) -> bool:
     if action_origin not in {None, "manual"}:
+        return False
+    if _allows_empty_frames_overwrite(incoming):
         return False
     existing_frames = existing.get("frames") if isinstance(existing, dict) else None
     incoming_frames = incoming.get("frames") if isinstance(incoming, dict) else None
@@ -741,11 +980,13 @@ def _contour_frame_summary(payload: dict) -> tuple[int, int]:
         if not isinstance(frame_payload, dict):
             continue
         for contour_payload in frame_payload.values():
-            if not isinstance(contour_payload, dict):
+            if isinstance(contour_payload, list):
+                for item in contour_payload:
+                    if isinstance(item, dict) and isinstance(item.get("points"), list):
+                        point_total += len(item["points"])
                 continue
-            points = contour_payload.get("points")
-            if isinstance(points, list):
-                point_total += len(points)
+            if isinstance(contour_payload, dict) and isinstance(contour_payload.get("points"), list):
+                point_total += len(contour_payload["points"])
     return len(frames), point_total
 
 
@@ -844,17 +1085,20 @@ def run_job(job_id: int) -> None:
             progress=lambda current, total, message=None: _update_job_progress(job_id, current, total, message),
             should_pause=lambda: _job_should_pause(job_id),
         )
-        payload = _preserve_axis_exclusions(fetch_contours(job_dict["series_id"], job_dict["module"]), payload)
+        existing_contours = fetch_contours(job_dict["series_id"], job_dict["module"])
+        payload = _preserve_axis_exclusions(existing_contours, payload)
+        payload = _preserve_exclude_regions_for_legacy_save(existing_contours, payload)
         if _job_should_pause(job_id):
             raise JobPaused("任务已暂停。")
         payload = _merge_contour_metadata(
-            fetch_contours(job_dict["series_id"], job_dict["module"]),
+            existing_contours,
             payload,
             series_id=job_dict["series_id"],
             module=job_dict["module"],
             actor=actor,
             action_origin=job_dict["adapter"],
         )
+        _validate_contours_for_save(payload)
         _upsert_contours(job_dict["series_id"], job_dict["module"], payload)
         recompute_measurements_for_module(job_dict["series_id"], job_dict["module"])
         with get_conn() as conn:
@@ -915,6 +1159,97 @@ def fetch_contours(series_id: int, module: str) -> dict | None:
             actor=None,
         )
 
+
+def _frame_has_annotation(frame_payload: dict | None) -> bool:
+    if not isinstance(frame_payload, dict):
+        return False
+    if any(_contour_has_points(frame_payload.get(key)) for key in CONTOUR_VALIDATION_KEYS):
+        return True
+    return bool(_exclude_regions_from_frame(frame_payload))
+
+
+def _annotation_module_key(role: str, module: str) -> str:
+    if module == "function" and role == "cine_lax_4ch":
+        return "function_4ch"
+    if module == "function" and role == "cine_lax_2ch":
+        return "function_2ch"
+    if module == "function" and role == "cine_lax_3ch":
+        return "function_3ch"
+    if module == "function":
+        return "function_sax"
+    return module
+
+
+def _summarize_study_annotation_rows(rows: list, study_ids: list[int]) -> dict[str, dict]:
+    summaries = {
+        str(study_id): {
+            "is_annotated": False,
+            "completed_modules": [],
+            "completed_count": 0,
+            "annotated_series_count": 0,
+            "annotated_frame_count": 0,
+            "latest_annotation_at": None,
+        }
+        for study_id in study_ids
+    }
+    annotated_series: dict[str, set[int]] = {str(study_id): set() for study_id in study_ids}
+    completed_modules: dict[str, set[str]] = {str(study_id): set() for study_id in study_ids}
+
+    for row in rows:
+        study_key = str(int(row["study_id"]))
+        summary = summaries.setdefault(
+            study_key,
+            {
+                "is_annotated": False,
+                "completed_modules": [],
+                "completed_count": 0,
+                "annotated_series_count": 0,
+                "annotated_frame_count": 0,
+                "latest_annotation_at": None,
+            },
+        )
+        payload = loads(row["payload_json"], {})
+        frames = payload.get("frames") if isinstance(payload, dict) else None
+        if not isinstance(frames, dict):
+            continue
+        annotated_frames = sum(1 for frame_payload in frames.values() if _frame_has_annotation(frame_payload))
+        if annotated_frames <= 0:
+            continue
+        summary["annotated_frame_count"] += annotated_frames
+        annotated_series.setdefault(study_key, set()).add(int(row["series_id"]))
+        completed_modules.setdefault(study_key, set()).add(
+            _annotation_module_key(str(row["role"] or "unknown"), str(row["module"] or ""))
+        )
+        updated_at = row["updated_at"]
+        if updated_at and (not summary["latest_annotation_at"] or updated_at > summary["latest_annotation_at"]):
+            summary["latest_annotation_at"] = updated_at
+
+    for study_key, summary in summaries.items():
+        modules = sorted(completed_modules.get(study_key, set()))
+        summary["completed_modules"] = modules
+        summary["completed_count"] = len(modules)
+        summary["annotated_series_count"] = len(annotated_series.get(study_key, set()))
+        summary["is_annotated"] = summary["annotated_frame_count"] > 0
+    return summaries
+
+
+def fetch_study_annotation_summaries(study_ids: list[int]) -> dict[str, dict]:
+    normalized_ids = sorted({int(study_id) for study_id in study_ids if int(study_id) > 0})
+    if not normalized_ids:
+        return {}
+    placeholders = ",".join("?" for _ in normalized_ids)
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT s.study_id, s.id AS series_id, s.role, c.module, c.payload_json, c.updated_at
+            FROM contours c
+            JOIN series s ON s.id = c.series_id
+            WHERE s.study_id IN ({placeholders})
+            """,
+            normalized_ids,
+        ).fetchall()
+    return _summarize_study_annotation_rows(rows, normalized_ids)
+
 def save_contours(
     series_id: int,
     module: str,
@@ -941,6 +1276,9 @@ def save_contours(
             module,
         )
         payload = _preserve_existing_frames_for_empty_manual_save(existing, payload, action_origin)
+    payload = _strip_transient_save_flags(payload)
+    payload = _preserve_exclude_regions_for_legacy_save(existing, payload)
+    _validate_contours_for_save(payload)
     payload = _prepare_phase_labels_for_save(existing, payload)
     merged = _merge_contour_metadata(
         existing,

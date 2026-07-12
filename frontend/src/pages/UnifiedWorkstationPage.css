@@ -123,6 +123,17 @@
   font-size: 12px;
 }
 
+.uws-feedback-button {
+  border-color: rgba(168, 203, 78, 0.38);
+  color: #dff0a5;
+  background: rgba(168, 203, 78, 0.1);
+}
+
+.uws-feedback-button:hover {
+  border-color: rgba(168, 203, 78, 0.65);
+  background: rgba(168, 203, 78, 0.18);
+}
+
 .uws-changelog-root {
   position: relative;
 }
@@ -484,6 +495,10 @@
 
 .uws-work-area.is-scroll {
   overflow: auto;
+}
+
+.uws-external-frame {
+  min-height: 0;
 }
 
 .uws-patient-nav {

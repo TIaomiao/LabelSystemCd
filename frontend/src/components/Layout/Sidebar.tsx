@@ -19,6 +19,7 @@ const Sidebar: React.FC = () => {
   const allowedHospitalBrowserUsers = ['lzq', 'pengliang', 'wanglujing'];
   const showHospitalBrowser = user && allowedHospitalBrowserUsers.includes(user.username);
   const showAdmin = !!user?.is_admin;
+  const showFeedbackDashboard = !!user?.is_admin || user?.username === 'ziantestpov';
 
   const menuItems = [
     // { path: '/', name: '概览面板', icon: <FaChartPie /> },
@@ -34,6 +35,7 @@ const Sidebar: React.FC = () => {
     // { path: '/other-findings', name: t('sidebar.other_findings'), icon: <FaFileAlt /> },
     // { path: '/lge', name: t('sidebar.lge'), icon: <FaFileAlt /> },
     { path: '/experiment', name: t('sidebar.experiment'), icon: <FaChartBar /> },
+    ...(showFeedbackDashboard ? [{ path: user?.is_admin ? '/admin/feedback' : '/feedback-dashboard', name: '反馈看板', icon: <FaChartBar /> }] : []),
     ...(showAdmin ? [{ path: '/admin/assignments', name: '病例分配', icon: <FaDatabase /> }] : []),
     ...(showAdmin ? [{ path: '/admin/monitor', name: '系统监控', icon: <FaChartBar /> }] : []),
     ...(showAdmin ? [{ path: '/admin/llm-gateway', name: 'LLM 网关', icon: <FaBrain /> }] : []),

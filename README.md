@@ -128,4 +128,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup_seg_env.ps1
 ```powershell
 $env:CVI_SEG_BUNDLE_DIR="D:\your\CMR_segmentation_bundle_20260320"
 $env:CVI_SEG_PYTHON="C:\ProgramData\anaconda3\envs\cvi-seg\python.exe"
+$env:CVI_DEFAULT_SAMPLE_PATH="D:\deidentified-cmr-sample"
 ```
+
+`CVI_DEFAULT_SAMPLE_PATH` 只用于本地目录浏览的默认入口。不要把真实病例路径写入源码或提交到 Git。

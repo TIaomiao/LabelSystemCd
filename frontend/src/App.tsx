@@ -16,6 +16,7 @@ import ModelPage from './pages/ModelPage';
 import SettingsPage from './pages/SettingsPage';
 import AdminMonitorPage from './pages/AdminMonitorPage';
 import AdminLlmGatewayPage from './pages/AdminLlmGatewayPage';
+import AdminFeedbackPage from './pages/AdminFeedbackPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import MessagesPage from './pages/MessagesPage';
 import ExperimentResultsPage from './pages/ExperimentResultsPage';
@@ -55,6 +56,13 @@ const PermissionRoute = ({ children, allowedUsers, adminOnly = false }: { childr
       extra={<Button type="primary" href="/">Back Home</Button>}
     />
   );
+};
+
+const FeedbackDashboardRoute = ({ children }: { children: React.ReactNode }) => {
+  const { user, loading } = useAuth();
+  if (loading) return <Spin size="large" />;
+  if (user && (user.is_admin || user.username === 'ziantestpov')) return <>{children}</>;
+  return <Navigate to="/workstation" replace />;
 };
 
 function App() {
@@ -134,6 +142,16 @@ function App() {
               <PermissionRoute allowedUsers={[]} adminOnly>
                 <AdminLlmGatewayPage />
               </PermissionRoute>
+            } />
+            <Route path="/admin/feedback" element={
+              <PermissionRoute allowedUsers={[]} adminOnly>
+                <AdminFeedbackPage />
+              </PermissionRoute>
+            } />
+            <Route path="/feedback-dashboard" element={
+              <FeedbackDashboardRoute>
+                <AdminFeedbackPage />
+              </FeedbackDashboardRoute>
             } />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>

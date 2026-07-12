@@ -10,7 +10,7 @@ DB_PATH = WORKSPACE_DIR / "cvi.db"
 RENDER_DIR = WORKSPACE_DIR / "renders"
 EXPORT_DIR = WORKSPACE_DIR / "exports"
 MODEL_RUN_DIR = WORKSPACE_DIR / "model_runs"
-DEFAULT_SAMPLE_PATH = PROJECT_ROOT / "0001517610_20250108_cha li ya"
+DEFAULT_SAMPLE_PATH = Path(os.environ.get("CVI_DEFAULT_SAMPLE_PATH", str(WORKSPACE_DIR))).expanduser()
 DEFAULT_BUNDLE_DIR = PROJECT_ROOT / "CMR_segmentation_bundle_20260320"
 if os.name == "nt":
     DEFAULT_MODEL_PYTHON = Path(r"C:\ProgramData\anaconda3\envs\cvi-seg\python.exe")

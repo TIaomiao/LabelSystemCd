@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import './EvaluationAnalyticsPanel.css';
 
 interface EvaluationAnalyticsPanelProps {
   library: string;
@@ -46,13 +47,13 @@ interface EvaluationAnalyticsPayload {
 }
 
 const FOCUS_RATERS = ['lixingxing', 'wanglujing', '宋豫皎'];
-const RATER_COLORS = ['#f59e0b', '#dc2626', '#2563eb'];
+const RATER_COLORS = ['#a8cb4e', '#68b9ca', '#d8aa5b'];
 
 const panelCardStyle: React.CSSProperties = {
-  borderRadius: 18,
-  border: '1px solid rgba(255,255,255,0.08)',
-  background: 'linear-gradient(180deg, rgba(19,25,34,0.94), rgba(10,14,21,0.96))',
-  boxShadow: '0 18px 36px rgba(0,0,0,0.18)',
+  borderRadius: 5,
+  border: '1px solid rgba(255,255,255,0.1)',
+  background: '#202020',
+  boxShadow: 'none',
 };
 
 const formatDateTime = (value?: string | null) => {
@@ -268,26 +269,6 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
     [data?.dimensions],
   );
 
-  const topStableDimensions = useMemo(
-    () => [...(data?.dimensions || [])]
-      .filter((dimension) => dimension.avg != null)
-      .sort((left, right) => {
-        const avgDelta = Number(right.avg || 0) - Number(left.avg || 0);
-        if (Math.abs(avgDelta) > 0.001) return avgDelta;
-        return left.spread - right.spread;
-      })
-      .slice(0, 2),
-    [data?.dimensions],
-  );
-
-  const weakestDimensions = useMemo(
-    () => [...(data?.dimensions || [])]
-      .filter((dimension) => dimension.avg != null)
-      .sort((left, right) => Number(left.avg || 0) - Number(right.avg || 0))
-      .slice(0, 3),
-    [data?.dimensions],
-  );
-
   const averageCompletion = useMemo(() => {
     const values = (data?.raters || [])
       .map((item) => item.completion_rate)
@@ -309,25 +290,6 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
     [data?.overlap_histogram],
   );
 
-  const interpretationLines = useMemo(() => {
-    if (!data) return [];
-    const stableText = topStableDimensions.map((dimension) => dimension.title).join('、');
-    const weakText = weakestDimensions.map((dimension) => dimension.title).join('、');
-    const disagreementText = topSpreadDimensions.slice(0, 3).map((dimension) => dimension.title).join('、');
-    return [
-      `当前纳入 ${data.rater_count} 位评分人，累计覆盖 ${data.union_case_count} 例，其中 ${data.fully_scored_case_count} 例为 ${data.rater_count} 人共同评分，可作为多专家一致性分析的主子集。`,
-      stableText
-        ? `评分最稳定、整体分数最高的维度主要是 ${stableText}，说明模型在报告结构、表达清晰度等“可读性”层面已经比较成熟。`
-        : '',
-      weakText
-        ? `当前最需要重点解释和改进的维度是 ${weakText}；如果写进论文，这一组更能体现模型在临床内容层面的真实短板。`
-        : '',
-      disagreementText
-        ? `专家分歧最大的维度集中在 ${disagreementText}，建议在正文中把它们定义为“主观判断最敏感的高难度维度”，并结合典型病例做定性说明。`
-        : '',
-    ].filter(Boolean);
-  }, [data, topSpreadDimensions, topStableDimensions, weakestDimensions]);
-
   const toggleUser = (username: string) => {
     const activeCount = (data?.raters || []).filter((item) => !hiddenUsers.has(item.username)).length;
     setHiddenUsers((current) => {
@@ -344,16 +306,18 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
 
   return (
     <section
+      className="evaluation-analytics-panel"
       style={{
         ...panelCardStyle,
         margin: 0,
         width: '100%',
         flexShrink: 0,
         overflow: 'hidden',
-        borderRadius: 24,
+        borderRadius: 5,
       }}
     >
       <div
+        className="evaluation-analytics-panel__header"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -361,7 +325,7 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
           gap: 12,
           padding: '16px 18px',
           borderBottom: collapsed ? 'none' : '1px solid rgba(255,255,255,0.08)',
-          background: 'linear-gradient(90deg, rgba(245,158,11,0.12), rgba(15,118,110,0.10) 55%, rgba(37,99,235,0.10))',
+          background: '#292929',
         }}
       >
         <div>
@@ -373,12 +337,13 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
             type="button"
+            className="evaluation-analytics-panel__button"
             onClick={() => setManualRefreshSignal((current) => current + 1)}
             style={{
-              borderRadius: 999,
+              borderRadius: 4,
               border: '1px solid rgba(255,255,255,0.12)',
-              background: 'rgba(15,23,42,0.5)',
-              color: '#e2e8f0',
+              background: '#202020',
+              color: '#f1f1f1',
               padding: '8px 14px',
               cursor: 'pointer',
             }}
@@ -387,12 +352,13 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
           </button>
           <button
             type="button"
+            className="evaluation-analytics-panel__button"
             onClick={() => setCollapsed((current) => !current)}
             style={{
-              borderRadius: 999,
+              borderRadius: 4,
               border: '1px solid rgba(255,255,255,0.12)',
-              background: 'rgba(15,23,42,0.72)',
-              color: '#f8fafc',
+              background: '#202020',
+              color: '#f1f1f1',
               padding: '8px 14px',
               cursor: 'pointer',
               fontWeight: 600,
@@ -404,7 +370,7 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
       </div>
 
       {!collapsed && (
-        <div style={{ padding: 20 }}>
+        <div className="evaluation-analytics-panel__content" style={{ padding: 16 }}>
           {loading && !data ? (
             <div style={{ color: 'rgba(226,232,240,0.72)', padding: '8px 2px' }}>正在加载评分结果...</div>
           ) : null}
@@ -414,6 +380,7 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
           {data ? (
             <>
               <div
+                className="evaluation-analytics-panel__metrics"
                 style={{
                   display: 'grid',
                   gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -445,10 +412,11 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
                 ].map((item) => (
                   <div
                     key={item.label}
+                    className="evaluation-analytics-panel__metric"
                     style={{
                       ...panelCardStyle,
                       padding: '14px 16px',
-                      background: 'linear-gradient(180deg, rgba(19,25,34,0.88), rgba(12,17,24,0.94))',
+                      background: '#252525',
                     }}
                   >
                     <div style={{ color: 'rgba(148,163,184,0.86)', fontSize: 12, marginBottom: 6 }}>{item.label}</div>
@@ -459,34 +427,7 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
               </div>
 
               <div
-                style={{
-                  ...panelCardStyle,
-                  padding: '18px 18px 16px',
-                  marginBottom: 18,
-                  background: 'linear-gradient(135deg, rgba(245,158,11,0.08), rgba(15,23,42,0.92) 42%, rgba(37,99,235,0.12))',
-                }}
-              >
-                <div style={{ color: '#f8fafc', fontSize: 16, fontWeight: 700, marginBottom: 10 }}>结果解读</div>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {interpretationLines.map((line, index) => (
-                    <div
-                      key={`${index}-${line}`}
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 12,
-                        background: 'rgba(255,255,255,0.03)',
-                        color: 'rgba(226,232,240,0.86)',
-                        lineHeight: 1.65,
-                        fontSize: 13,
-                      }}
-                    >
-                      {line}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div
+                className="evaluation-analytics-panel__rater-grid"
                 style={{
                   display: 'grid',
                   gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
@@ -501,11 +442,12 @@ const EvaluationAnalyticsPanel: React.FC<EvaluationAnalyticsPanelProps> = ({ lib
                   return (
                     <div
                       key={rater.username}
+                      className="evaluation-analytics-panel__rater"
                       style={{
                         ...panelCardStyle,
                         padding: '14px 16px',
                         border: `1px solid ${colorMap[rater.username] || '#f59e0b'}55`,
-                        background: 'linear-gradient(180deg, rgba(20,27,36,0.9), rgba(10,14,21,0.95))',
+                        background: '#252525',
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>

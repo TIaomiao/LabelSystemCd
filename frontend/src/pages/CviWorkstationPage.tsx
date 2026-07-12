@@ -14,6 +14,8 @@ interface CviCase {
   cvi_study_id?: number | null;
   anon_label?: string;
   public_case_code?: string;
+  primary_id_label?: string;
+  primary_id?: string;
   imported_at?: string | null;
 }
 
@@ -30,6 +32,44 @@ const sourceLabel: Record<string, string> = {
 const CASE_FETCH_LIMIT_FALLBACK = 5000;
 
 const mergeSourceOptions = (serverSources: CviSource[]): CviSource[] => serverSources || [];
+
+const readApiPayload = async (response: Response) => {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      response.status >= 500
+        ? '病例库后端暂时不可用，请稍后重试。'
+        : `病例库接口返回了网页而不是数据（HTTP ${response.status}），请刷新后重试。`
+    );
+  }
+  return response.json();
+};
+
+const registrationIdFromCase = (caseItem?: CviCase | null) => {
+  if (!caseItem || caseItem.dataset !== 'CMR_ALL') return '';
+  for (const value of [caseItem.case_id, caseItem.public_case_code, caseItem.primary_id]) {
+    const match = (value || '').match(/(?:^|\D)(\d{10})(?!\d)/);
+    if (match?.[1]) return match[1];
+  }
+  return '';
+};
+
+const studyDateFromCase = (caseItem?: CviCase | null) => {
+  if (!caseItem || caseItem.dataset !== 'CMR_ALL') return '';
+  const match = (caseItem.public_case_code || caseItem.case_id || '').match(/20\d{6}/);
+  if (!match) return '';
+  const value = match[0];
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+};
+
+const caseDisplayName = (caseItem?: CviCase | null, fallback = '匿名病例') => {
+  if (!caseItem) return fallback;
+  const registrationId = registrationIdFromCase(caseItem);
+  if (registrationId) {
+    return `登记号：${registrationId}`;
+  }
+  return caseItem.anon_label || fallback;
+};
 
 const applyClientSourceFilter = (items: CviCase[], sourceValue: string): CviCase[] => {
   if (!sourceValue || sourceValue === 'all' || sourceValue === 'functional' || sourceValue === 'annotation') {
@@ -77,7 +117,7 @@ const CviWorkstationPage: React.FC = () => {
       if (refresh) params.set('refresh', '1');
 
       let response = await fetch(`/api/cvi-library/cases?${params.toString()}`);
-      let payload = await response.json();
+      let payload = await readApiPayload(response);
       let usedCompatibilityFallback = false;
       if (!response.ok && payload?.error === 'Unknown source' && source.startsWith('functional::')) {
         const fallbackParams = new URLSearchParams({
@@ -87,7 +127,7 @@ const CviWorkstationPage: React.FC = () => {
         });
         if (refresh) fallbackParams.set('refresh', '1');
         response = await fetch(`/api/cvi-library/cases?${fallbackParams.toString()}`);
-        payload = await response.json();
+        payload = await readApiPayload(response);
         usedCompatibilityFallback = response.ok;
       }
       if (!response.ok) {
@@ -128,7 +168,7 @@ const CviWorkstationPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force })
       });
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
       if (!response.ok) {
         throw new Error(payload.error || '导入工作站失败');
       }
@@ -192,7 +232,7 @@ const CviWorkstationPage: React.FC = () => {
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
-            placeholder="搜索病例号 / 数据集"
+            placeholder="搜索登记号 / 病例号 / 数据集"
             style={{
               width: '100%',
               padding: '8px 10px',
@@ -235,6 +275,11 @@ const CviWorkstationPage: React.FC = () => {
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
+          {source === 'functional::CMR_ALL::all' && !search && (
+            <div style={{ padding: '8px 12px', color: 'var(--text-tertiary)', fontSize: 12 }}>
+              当前展示前 {cases.length} 例，登记号搜索覆盖全部昆医病例
+            </div>
+          )}
           {loading ? (
             <div style={{ padding: 16, color: 'var(--text-tertiary)' }}>正在加载病例库...</div>
           ) : cases.length === 0 ? (
@@ -266,9 +311,11 @@ const CviWorkstationPage: React.FC = () => {
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap'
                     }}>
-                      {caseItem.anon_label || '匿名病例'}
+                      {caseDisplayName(caseItem)}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                      {registrationIdFromCase(caseItem) ? `${caseItem.anon_label || '匿名病例'} / ` : ''}
+                      {studyDateFromCase(caseItem) ? `${studyDateFromCase(caseItem)} / ` : ''}
                       {sourceLabel[caseItem.source] || caseItem.source} / {caseItem.dataset}
                     </div>
                   </div>

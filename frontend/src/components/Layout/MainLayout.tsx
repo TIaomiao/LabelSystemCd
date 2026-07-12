@@ -9,7 +9,9 @@ const MainLayout: React.FC = () => {
   const { user, logout } = useAuth();
   const { language, setLanguage, t } = useLanguage();
   const location = useLocation();
-  const isFullPageRoute = location.pathname.startsWith('/workstation');
+  const isFullPageRoute = location.pathname.startsWith('/workstation')
+    || location.pathname === '/admin/feedback'
+    || location.pathname === '/feedback-dashboard';
 
   if (isFullPageRoute) {
     return <Outlet />;
