@@ -338,6 +338,8 @@ def _run_verification(worktree: Path, files: list[str], log_path: Path, *, requi
         commands.append(('python_compile', [shutil.which('python') or 'python', '-m', 'compileall', '-q', 'backend', 'apps/api'], 180))
     if any(path.startswith('frontend/') and path.endswith(('.ts', '.tsx', '.js', '.jsx', '.css')) for path in files):
         commands.append(('frontend_build', ['npm', 'run', 'build'], 900))
+    if any(path.startswith('apps/web/') and path.endswith(('.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '.html', '.json')) for path in files):
+        commands.append(('embedded_web_build', ['npm', 'run', 'build'], 900))
     results = []
     all_passed = True
     env = execution_environment()
@@ -348,7 +350,12 @@ def _run_verification(worktree: Path, files: list[str], log_path: Path, *, requi
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     with log_path.open('a', encoding='utf-8') as log:
         for test_id, command, timeout in commands:
-            cwd = worktree / 'frontend' if test_id == 'frontend_build' else worktree
+            if test_id == 'frontend_build':
+                cwd = worktree / 'frontend'
+            elif test_id == 'embedded_web_build':
+                cwd = worktree / 'apps' / 'web'
+            else:
+                cwd = worktree
             log.write(f'\n[verification:{test_id}] {" ".join(command)}\n')
             log.flush()
             sandbox_command = _contained_command(
@@ -416,6 +423,7 @@ def _contained_command(
     if not common_git.is_absolute():
         common_git = (worktree / common_git).resolve()
     frontend_dependencies = PROJECT_ROOT / 'frontend' / 'node_modules'
+    worktree_frontend_dependencies = worktree / 'frontend' / 'node_modules'
     trusted_tests: list[tuple[Path, Path]] = []
     if include_frontend_dependencies:
         for name in (
@@ -441,6 +449,7 @@ def _contained_command(
         runtime_paths.append(executable)
     if include_frontend_dependencies and frontend_dependencies.is_dir():
         runtime_paths.append(frontend_dependencies)
+        worktree_frontend_dependencies.mkdir(parents=True, exist_ok=True)
     runtime_paths.extend(source for source, _ in trusted_tests)
     args = [
         prlimit,
@@ -482,6 +491,13 @@ def _contained_command(
     args.extend([
         '--ro-bind', str(common_git), str(common_git),
         '--bind', str(worktree), str(worktree),
+        *(
+            ['--ro-bind', str(frontend_dependencies), str(worktree_frontend_dependencies)]
+            if include_frontend_dependencies
+            and frontend_dependencies.is_dir()
+            and frontend_dependencies.resolve() != worktree_frontend_dependencies.resolve()
+            else []
+        ),
         '--ro-bind', str(worktree / '.git'), str(worktree / '.git'),
         *[
             item

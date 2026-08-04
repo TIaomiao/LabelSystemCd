@@ -128,6 +128,23 @@ class ControlledFeedbackExecutorTests(unittest.TestCase):
         self.assertTrue(passed)
         self.assertTrue(any(item['id'] == 'feedback_unit_tests' and item['passed'] for item in tests['commands']))
 
+    @patch.object(executor, '_contained_command', side_effect=lambda _worktree, _tmp, command, **_kwargs: command)
+    @patch.object(executor.subprocess, 'run', return_value=subprocess.CompletedProcess(['npm'], 0))
+    def test_apps_web_change_requires_embedded_build(self, _run, _contained):
+        repository = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / 'controller.log'
+            tests, passed = executor._run_verification(
+                repository,
+                ['apps/web/src/core.ts'],
+                log_path,
+                require_feedback_tests=False,
+            )
+
+        self.assertTrue(passed)
+        embedded = next(item for item in tests['commands'] if item['id'] == 'embedded_web_build')
+        self.assertEqual(embedded['command'], ['npm', 'run', 'build'])
+
     def test_prompt_freezes_scope_and_forbids_production_actions(self):
         prompt = executor.build_execution_prompt(
             {'id': 9, 'title': 'test'},
