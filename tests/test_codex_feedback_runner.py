@@ -18,6 +18,7 @@ SAMPLE_RESULT = {
     'investigation_summary': '概览区占据固定高度，详情只能在内层滚动。',
     'root_cause': '固定视口和不可收缩概览共同压缩工作区。',
     'confidence': 'high',
+    'implementation_size': 'small',
     'evidence': [
         {
             'path': 'frontend/src/pages/AdminFeedbackPage.css',
@@ -115,6 +116,7 @@ class CodexFeedbackRunnerTest(unittest.TestCase):
             ['frontend/src/pages/AdminFeedbackPage.tsx', 'apps/web/src/role-management-bridge.ts'],
         )
         self.assertEqual(result['execution_scope'], 'minimal_candidate')
+        self.assertEqual(result['implementation_size'], 'small')
         self.assertEqual(result['reproducibility'], 'code_only')
 
     def test_proposal_keeps_repository_evidence_and_base_sha(self):
@@ -127,6 +129,7 @@ class CodexFeedbackRunnerTest(unittest.TestCase):
         self.assertEqual(proposal['base_sha'], 'abc123')
         self.assertTrue(proposal['dirty_worktree'])
         self.assertEqual(proposal['root_cause'], SAMPLE_RESULT['root_cause'])
+        self.assertEqual(proposal['implementation_size'], 'small')
         self.assertEqual(proposal['repository_evidence'][0]['path'], 'frontend/src/pages/AdminFeedbackPage.css')
         self.assertIn('abc123', proposal['codex_brief'])
 

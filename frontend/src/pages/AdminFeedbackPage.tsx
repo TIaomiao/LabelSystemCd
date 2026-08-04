@@ -83,6 +83,7 @@ interface FeedbackWorkPlan {
     codex_brief?: string;
     repository_evidence?: { path?: string; line_start?: number; line_end?: number; reason?: string }[];
     confidence?: 'high' | 'medium' | 'low' | string;
+    implementation_size?: 'small' | 'medium' | 'large' | string;
     base_sha?: string;
     branch?: string;
     dirty_worktree?: boolean;
@@ -101,6 +102,7 @@ interface FeedbackCodexResult {
   investigation_summary?: string;
   root_cause?: string;
   confidence?: 'high' | 'medium' | 'low' | string;
+  implementation_size?: 'small' | 'medium' | 'large' | string;
   recommended_changes?: { path?: string; change?: string; rationale?: string }[];
   risks?: { level?: string; risk?: string; mitigation?: string }[];
   verification_steps?: string[];
@@ -181,7 +183,7 @@ const statusLabels: Record<string, string> = {
 const scopeLabels: Record<string, string> = {
   guidance_only: '已有功能指导',
   minimal_candidate: '候选小修复',
-  needs_review: '需人工评估',
+  needs_review: '执行前需审查',
   large_change: '较大改动',
 };
 
@@ -214,6 +216,18 @@ const codexInvestigationStatusLabels: Record<string, string> = {
 };
 
 const confidenceLabels: Record<string, string> = { high: '高', medium: '中', low: '低' };
+const implementationSizeLabels: Record<string, string> = { small: '小改动', medium: '中等改动', large: '大型改动' };
+const riskLevelLabels: Record<string, string> = { low: '低', medium: '中', high: '高', critical: '严重' };
+const riskPriority: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
+const parseImplementationStep = (step: string) => {
+  const separator = step.indexOf('：');
+  if (separator > 0) {
+    const path = step.slice(0, separator).trim();
+    if (path.includes('/')) return { path, change: step.slice(separator + 1).trim() };
+  }
+  return { path: '', change: step };
+};
 
 const reproducibilityLabels: Record<string, string> = {
   code_only: '仅凭代码即可判断',
@@ -655,6 +669,7 @@ const AdminFeedbackPage: React.FC = () => {
       codex_brief: workPlan.proposal.codex_brief || '',
       repository_evidence: [...(workPlan.proposal.repository_evidence || [])],
       confidence: workPlan.proposal.confidence || 'low',
+      implementation_size: workPlan.proposal.implementation_size || 'medium',
       base_sha: workPlan.proposal.base_sha || '',
       branch: workPlan.proposal.branch || '',
       dirty_worktree: !!workPlan.proposal.dirty_worktree,
@@ -713,6 +728,9 @@ const AdminFeedbackPage: React.FC = () => {
     || (rawPlanSummary.includes(legacyRootCauseMarker)
       ? rawPlanSummary.slice(rawPlanSummary.indexOf(legacyRootCauseMarker) + legacyRootCauseMarker.length)
       : '当前方案未单独记录根因，请在方案对话中要求 Codex 重新核对。');
+  const planSteps = (workPlan?.proposal.implementation_steps || []).map(parseImplementationStep);
+  const planRisks = [...(workPlan?.proposal.risks || [])]
+    .sort((left, right) => (riskPriority[right.level || 'medium'] || 0) - (riskPriority[left.level || 'medium'] || 0));
 
   return (
     <div className={`admin-feedback${readOnly ? ' is-read-only' : ''}`}>
@@ -930,6 +948,7 @@ const AdminFeedbackPage: React.FC = () => {
                           ) : (
                             <>
                               <p>{run.result?.investigation_summary || '本轮调查已完成，最新结构化方案见下方。'}</p>
+                              {run.result?.implementation_size && <small className="admin-feedback__plan-chat-size">实现量：{implementationSizeLabels[run.result.implementation_size] || run.result.implementation_size}</small>}
                               {(run.result?.root_cause || run.result?.recommended_changes?.length || run.result?.clarifying_question) && (
                                 <details>
                                   <summary>查看本轮依据与变化</summary>
@@ -979,7 +998,8 @@ const AdminFeedbackPage: React.FC = () => {
                       <p>{planSummary || '暂无方案摘要。'}</p>
                       <div>
                         <span>置信度：{confidenceLabels[workPlan.proposal.confidence || 'low'] || '待确认'}</span>
-                        <span>范围：{scopeLabels[workPlan.proposal.execution_scope || 'needs_review'] || '需人工评估'}</span>
+                        <span>实现量：{implementationSizeLabels[workPlan.proposal.implementation_size || ''] || '待重新评估'}</span>
+                        <span>门禁：{scopeLabels[workPlan.proposal.execution_scope || 'needs_review'] || '执行前需审查'}</span>
                         <span>{reproducibilityLabels[workPlan.proposal.reproducibility || 'production_data_required']}</span>
                       </div>
                     </div>
@@ -1010,20 +1030,30 @@ const AdminFeedbackPage: React.FC = () => {
                     </details>
                     <div className="admin-feedback__plan-columns">
                       <div>
-                        <h3>建议处理</h3>
-                        <ol>{(workPlan.proposal.implementation_steps || []).map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ol>
+                        <h3>准备怎么改</h3>
+                        <ol className="admin-feedback__compact-steps">{planSteps.slice(0, 4).map((step, index) => <li key={`${step.path}-${step.change}-${index}`}><span>{step.change}</span>{step.path && <code>{step.path}</code>}</li>)}</ol>
+                        {planSteps.length > 4 && <p className="admin-feedback__more-count">另有 {planSteps.length - 4} 项技术改动，已收进详细清单。</p>}
                       </div>
                       <div>
-                        <h3><FaExclamationTriangle /> 风险与控制</h3>
-                        {(workPlan.proposal.risks || []).map((risk, index) => (
+                        <h3><FaExclamationTriangle /> 需要注意的风险</h3>
+                        {planRisks.slice(0, 3).map((risk, index) => (
                           <div className="admin-feedback__risk" key={`${risk.risk}-${index}`}>
-                            <strong>{risk.level || 'medium'}</strong><span>{risk.risk || '待补充风险'}</span><small>{risk.mitigation || '需人工确认缓解方式'}</small>
+                            <strong>{riskLevelLabels[risk.level || 'medium'] || '中'}</strong><span>{risk.risk || '待补充风险'}</span><small>{risk.mitigation || '需人工确认缓解方式'}</small>
                           </div>
                         ))}
+                        {planRisks.length > 3 && <p className="admin-feedback__more-count">其余 {planRisks.length - 3} 项风险在详细清单中。</p>}
                       </div>
                     </div>
                     <details className="admin-feedback__plan-technical">
-                      <summary>查看验证步骤与 Codex 执行任务书</summary>
+                      <summary>查看完整改动、风险、验证步骤与 Codex 任务书</summary>
+                      <div className="admin-feedback__verification">
+                        <h3>完整改动清单</h3>
+                        <ol>{planSteps.map((step, index) => <li key={`full-${step.path}-${index}`}>{step.path && <code>{step.path}</code>}{step.path ? '：' : ''}{step.change}</li>)}</ol>
+                      </div>
+                      <div className="admin-feedback__verification">
+                        <h3>完整风险清单</h3>
+                        {planRisks.map((risk, index) => <div className="admin-feedback__risk" key={`full-${risk.risk}-${index}`}><strong>{riskLevelLabels[risk.level || 'medium'] || '中'}</strong><span>{risk.risk || '待补充风险'}</span><small>{risk.mitigation || '需人工确认缓解方式'}</small></div>)}
+                      </div>
                       <div className="admin-feedback__verification">
                         <h3>验证方式</h3>
                         <ul>{(workPlan.proposal.verification_steps || []).map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ul>
@@ -1042,6 +1072,9 @@ const AdminFeedbackPage: React.FC = () => {
                       {workPlan.status === 'queued' && !executionRun && <span>这是旧版占位队列记录；管理员可在代码基线干净后启动受控执行。</span>}
                       {canControlExecution && !executionCapability && <span>受控执行后端尚未激活；当前按钮已安全隐藏。</span>}
                     </div>
+                    {!executionRun && ['draft', 'approved'].includes(workPlan.status) && (
+                      <p className="admin-feedback__execution-location-hint">确认方案并启动受控 Codex 后，实时记录、代码改动、测试结果和人工审查四个标签会直接出现在本方案下方，不需要登录服务器查文件。</p>
+                    )}
                     {executionRun && (
                       <section className="admin-feedback__execution">
                         <div className="admin-feedback__execution-head">
@@ -1089,7 +1122,6 @@ const AdminFeedbackPage: React.FC = () => {
                         </div>}
                       </section>
                     )}
-                    {canOperatePlans && workPlan.status === 'draft' && <label className="admin-feedback__revision-note">要求 AI 重新生成时的修订说明<textarea rows={2} value={revisionNote} onChange={event => setRevisionNote(event.target.value)} placeholder="指出方案误解的范围、遗漏的风险或希望采用的方向。" /></label>}
                     </>
                     )}
                   </div>

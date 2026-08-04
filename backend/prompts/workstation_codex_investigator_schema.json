@@ -6,6 +6,7 @@
     "investigation_summary",
     "root_cause",
     "confidence",
+    "implementation_size",
     "evidence",
     "recommended_changes",
     "risks",
@@ -19,6 +20,7 @@
     "investigation_summary": { "type": "string" },
     "root_cause": { "type": "string" },
     "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "implementation_size": { "type": "string", "enum": ["small", "medium", "large"] },
     "evidence": {
       "type": "array",
       "items": {

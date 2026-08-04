@@ -4256,6 +4256,9 @@ def _normalize_feedback_work_plan(raw_text, issue):
     confidence = text('confidence', 'low')
     if confidence not in {'high', 'medium', 'low'}:
         confidence = 'low'
+    implementation_size = text('implementation_size', 'medium')
+    if implementation_size not in {'small', 'medium', 'large'}:
+        implementation_size = 'medium'
     reproducibility = text('reproducibility', 'production_data_required')
     if reproducibility not in {'code_only', 'demo_cases', 'production_data_required'}:
         reproducibility = 'production_data_required'
@@ -4274,6 +4277,7 @@ def _normalize_feedback_work_plan(raw_text, issue):
         'codex_brief': codex_brief,
         'repository_evidence': repository_evidence,
         'confidence': confidence,
+        'implementation_size': implementation_size,
         'clarifying_question': text('clarifying_question'),
         'base_sha': text('base_sha')[:64],
         'branch': text('branch')[:160],
@@ -4419,6 +4423,7 @@ def _feedback_codex_prompt_history(issue_id, current_run_id, limit=5):
                 'investigation_summary': result.get('investigation_summary'),
                 'root_cause': result.get('root_cause'),
                 'confidence': result.get('confidence'),
+                'implementation_size': result.get('implementation_size'),
                 'evidence': (result.get('evidence') or [])[:12],
                 'recommended_changes': (result.get('recommended_changes') or [])[:12],
                 'risks': (result.get('risks') or [])[:8],

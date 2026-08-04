@@ -301,8 +301,7 @@
   gap: 12px;
 }
 .admin-feedback__issue-editor label,
-.admin-feedback__plan-editor label,
-.admin-feedback__revision-note {
+.admin-feedback__plan-editor label {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -312,8 +311,7 @@
 }
 .admin-feedback__issue-editor input,
 .admin-feedback__issue-editor textarea,
-.admin-feedback__plan-editor textarea,
-.admin-feedback__revision-note textarea {
+.admin-feedback__plan-editor textarea {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(146, 179, 165, 0.32);
@@ -330,7 +328,6 @@
 .admin-feedback__issue-editor input:focus,
 .admin-feedback__issue-editor textarea:focus,
 .admin-feedback__plan-editor textarea:focus,
-.admin-feedback__revision-note textarea:focus,
 .admin-feedback__plan-chat-composer textarea:focus {
   outline: 2px solid rgba(34, 162, 195, 0.46);
   outline-offset: 1px;
@@ -385,7 +382,6 @@
 .admin-feedback__work-plan-head > span.is-pending,
 .admin-feedback__work-plan-head > span.is-running { color: var(--fb-sea); border-color: rgba(34,162,195,.45); }
 .admin-feedback__work-plan-head > span.is-failed { color: #ffd0d0; border-color: rgba(224,123,123,.5); }
-.admin-feedback__revision-note { margin: 0 0 12px; }
 .admin-feedback__plan-chat { padding: 13px 14px; border-bottom: 1px solid var(--fb-line); background: #10191c; }
 .admin-feedback__plan-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .admin-feedback__plan-chat-head > div { display: flex; align-items: center; gap: 7px; color: var(--fb-sea); }
@@ -401,6 +397,7 @@
 .admin-feedback__plan-chat-message header strong { color: var(--fb-bamboo); font-size: 12px; }
 .admin-feedback__plan-chat-message header span { color: var(--fb-muted); font-size: 11px; }
 .admin-feedback__plan-chat-message p { margin: 0; color: var(--fb-text); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.admin-feedback__plan-chat-size { display: inline-block; margin-top: 6px; color: var(--fb-sea); font-size: 11px; }
 .admin-feedback__plan-chat-message details { margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(146,179,165,.12); }
 .admin-feedback__plan-chat-message summary { cursor: pointer; color: var(--fb-sea); font-size: 12px; }
 .admin-feedback__plan-chat-message details p,
@@ -466,6 +463,11 @@
 .admin-feedback__work-plan ol,
 .admin-feedback__work-plan ul { margin: 0; padding-left: 20px; color: var(--fb-text); font-size: 13px; line-height: 1.65; }
 .admin-feedback__work-plan li + li { margin-top: 5px; }
+.admin-feedback__compact-steps { padding-left: 18px; }
+.admin-feedback__compact-steps li { padding-left: 2px; }
+.admin-feedback__compact-steps li > span { display: block; color: var(--fb-text); }
+.admin-feedback__compact-steps code { display: block; margin-top: 2px; color: var(--fb-muted); font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; overflow-wrap: anywhere; }
+.admin-feedback__more-count { margin: 8px 0 0; color: var(--fb-muted); font-size: 11px; }
 .admin-feedback__risk { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 5px 7px; padding: 7px 0; border-top: 1px solid rgba(146,179,165,.1); }
 .admin-feedback__risk:first-of-type { border-top: 0; padding-top: 0; }
 .admin-feedback__risk strong { align-self: start; border-radius: 3px; padding: 2px 5px; color: #2b1717; background: var(--fb-gold); font-size: 10px; text-transform: uppercase; }
@@ -480,6 +482,7 @@
 .admin-feedback__work-plan-actions button { display: inline-flex; align-items: center; gap: 6px; }
 .admin-feedback__work-plan-actions button.is-secondary { color: var(--fb-wave); border-color: var(--fb-line-strong); background: transparent; }
 .admin-feedback__work-plan-actions > span { color: var(--fb-lime); font-size: 13px; }
+.admin-feedback__execution-location-hint { margin: 9px 0 0; padding: 8px 9px; border-left: 2px solid var(--fb-sea); color: var(--fb-muted); background: rgba(34,162,195,.045); font-size: 11px; line-height: 1.55; }
 
 .admin-feedback__execution { margin-top: 14px; border: 1px solid rgba(168,203,78,.34); border-radius: 6px; overflow: hidden; background: #10191c; }
 .admin-feedback__execution-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 11px 12px; border-bottom: 1px solid var(--fb-line); background: rgba(168,203,78,.055); }

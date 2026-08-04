@@ -15,6 +15,7 @@ SCHEMA_PATH = Path(__file__).resolve().parent / 'prompts' / 'workstation_codex_i
 LLM_GATEWAY_CONFIG_PATH = Path(__file__).resolve().parent / 'instance' / 'llm_gateway_config.json'
 ALLOWED_SCOPES = {'guidance_only', 'minimal_candidate', 'needs_review', 'large_change'}
 ALLOWED_REPRODUCIBILITY = {'code_only', 'demo_cases', 'production_data_required'}
+ALLOWED_IMPLEMENTATION_SIZES = {'small', 'medium', 'large'}
 ALLOWED_NEW_SOURCE_SUFFIXES = {
     '.css', '.html', '.js', '.jsx', '.json', '.md', '.mjs', '.py', '.sh', '.ts', '.tsx', '.yaml', '.yml',
 }
@@ -184,6 +185,9 @@ def normalize_investigation_result(raw: Any) -> dict[str, Any]:
     confidence = _normalize_text(raw.get('confidence'))
     if confidence not in {'high', 'medium', 'low'}:
         confidence = 'low'
+    implementation_size = _normalize_text(raw.get('implementation_size'))
+    if implementation_size not in ALLOWED_IMPLEMENTATION_SIZES:
+        implementation_size = 'medium'
     scope = _normalize_text(raw.get('execution_scope'))
     if scope not in ALLOWED_SCOPES:
         scope = 'needs_review'
@@ -199,6 +203,7 @@ def normalize_investigation_result(raw: Any) -> dict[str, Any]:
         'investigation_summary': _normalize_text(raw.get('investigation_summary'))[:12000],
         'root_cause': _normalize_text(raw.get('root_cause'))[:12000],
         'confidence': confidence,
+        'implementation_size': implementation_size,
         'evidence': evidence[:30],
         'recommended_changes': changes[:30],
         'risks': risks[:20],
@@ -335,6 +340,7 @@ def investigation_to_proposal(result: dict[str, Any], metadata: dict[str, Any], 
     codex_brief = '\n'.join([
         f"处理 CMR Workstation 问题 #{issue.get('id')}: {issue.get('title')}",
         f"基线 commit: {metadata.get('base_sha')}",
+        f"实现工作量: {result.get('implementation_size', 'medium')}",
         f"仓库调查结论: {summary}",
         f"根因判断: {root_cause}",
         '代码证据:',
@@ -352,6 +358,7 @@ def investigation_to_proposal(result: dict[str, Any], metadata: dict[str, Any], 
         'codex_brief': codex_brief,
         'repository_evidence': result.get('evidence', []),
         'confidence': result.get('confidence', 'low'),
+        'implementation_size': result.get('implementation_size', 'medium'),
         'clarifying_question': result.get('clarifying_question', ''),
         'base_sha': metadata.get('base_sha', ''),
         'branch': metadata.get('branch', ''),
@@ -364,6 +371,7 @@ def investigation_to_proposal(result: dict[str, Any], metadata: dict[str, Any], 
 
 def investigation_markdown(result: dict[str, Any], metadata: dict[str, Any]) -> str:
     confidence_labels = {'high': '高', 'medium': '中', 'low': '低'}
+    implementation_size_labels = {'small': '小', 'medium': '中', 'large': '大'}
     reproducibility_labels = {
         'code_only': '仅凭代码即可判断',
         'demo_cases': '可用 2–5 个 demo case 复现',
@@ -377,6 +385,8 @@ def investigation_markdown(result: dict[str, Any], metadata: dict[str, Any]) -> 
         f"**根因判断（置信度：{confidence_labels.get(result.get('confidence'), '低')}）**",
         '',
         result.get('root_cause') or '当前仓库证据不足，仍需人工确认。',
+        '',
+        f"**实现工作量：** {implementation_size_labels.get(result.get('implementation_size'), '中')}（与临床/数据风险分开评估）",
         '',
         f"**复现边界：** {reproducibility_labels.get(result.get('reproducibility'), '需要生产数据或运行证据')}",
         '',
