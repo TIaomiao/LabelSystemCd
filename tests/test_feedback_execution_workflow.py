@@ -14,7 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
 import routes
 from codex_feedback_executor import CodexExecutionError
 from extensions import db
-from models import FeedbackExecutionRun, FeedbackIssue, FeedbackSession, FeedbackWorkPlan, User
+from models import FeedbackCodexRun, FeedbackExecutionRun, FeedbackIssue, FeedbackSession, FeedbackWorkPlan, User
 
 
 class FeedbackExecutionWorkflowTests(unittest.TestCase):
@@ -75,6 +75,32 @@ class FeedbackExecutionWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(CodexExecutionError, '未提交改动'):
                 routes._queue_feedback_execution(issue, plan, self.user_id)
             self.assertEqual(FeedbackExecutionRun.query.count(), 0)
+
+    def test_issue_serialization_includes_reporter_and_latest_investigation(self):
+        with self.app.app_context():
+            issue = FeedbackIssue(
+                session_id=self.session_id,
+                reporter_id=self.user_id,
+                category='bug',
+                title='serialization issue',
+            )
+            db.session.add(issue)
+            db.session.flush()
+            run = FeedbackCodexRun(
+                issue_id=issue.id,
+                initiated_by_id=self.user_id,
+                status='completed',
+                phase='investigation',
+                base_sha='a' * 40,
+            )
+            db.session.add(run)
+            db.session.commit()
+
+            payload = issue.to_dict(include_user=True)
+
+            self.assertEqual(payload['reporter_username'], 'admin')
+            self.assertEqual(payload['codex_investigation']['id'], run.id)
+            self.assertNotIn('worktree_path', payload)
 
     def test_queue_freezes_plan_snapshot_and_starts_one_worker(self):
         with self.app.app_context():

@@ -872,12 +872,6 @@ class FeedbackIssue(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
-        if include_paths:
-            payload.update({
-                'worktree_path': self.worktree_path or '',
-                'artifact_dir': self.artifact_dir or '',
-            })
-        return payload
         latest_codex_run = self.codex_runs[-1] if self.codex_runs else None
         if latest_codex_run is not None:
             payload['codex_investigation'] = latest_codex_run.to_dict(include_result=False)
