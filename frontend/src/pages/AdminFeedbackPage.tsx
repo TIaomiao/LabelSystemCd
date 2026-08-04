@@ -129,6 +129,17 @@ interface FeedbackCodexRun {
   finished_at?: string | null;
 }
 
+interface FeedbackBaselineStatus {
+  available: boolean;
+  executable: boolean;
+  current_clean: boolean;
+  current_base_sha: string;
+  plan_base_sha: string;
+  investigated_dirty: boolean;
+  reason: 'ready' | 'investigation_was_dirty' | 'current_repository_dirty' | 'plan_base_missing' | 'plan_base_stale' | 'repository_unavailable' | string;
+  message: string;
+}
+
 interface FeedbackExecutionRun {
   id: number;
   issue_id: number;
@@ -270,6 +281,7 @@ const AdminFeedbackPage: React.FC = () => {
   const [workPlan, setWorkPlan] = useState<FeedbackWorkPlan | null>(null);
   const [codexInvestigation, setCodexInvestigation] = useState<FeedbackCodexRun | null>(null);
   const [investigationHistory, setInvestigationHistory] = useState<FeedbackCodexRun[]>([]);
+  const [baselineStatus, setBaselineStatus] = useState<FeedbackBaselineStatus | null>(null);
   const [executionRun, setExecutionRun] = useState<FeedbackExecutionRun | null>(null);
   const [executionCapability, setExecutionCapability] = useState(false);
   const [executionEvents, setExecutionEvents] = useState('');
@@ -385,6 +397,7 @@ const AdminFeedbackPage: React.FC = () => {
       setWorkPlan(payload.work_plan || null);
       setCodexInvestigation(payload.codex_investigation || null);
       setInvestigationHistory(payload.investigation_history || []);
+      setBaselineStatus(payload.baseline_status || null);
       setExecutionRun(payload.execution || null);
       setExecutionCapability(payload.execution_capability?.enabled === true);
     } catch (err) {
@@ -398,6 +411,7 @@ const AdminFeedbackPage: React.FC = () => {
       setWorkPlan(null);
       setCodexInvestigation(null);
       setInvestigationHistory([]);
+      setBaselineStatus(null);
       setExecutionRun(null);
       setExecutionCapability(false);
       setExecutionEvents('');
@@ -415,6 +429,7 @@ const AdminFeedbackPage: React.FC = () => {
     setIssueDraft({});
     setCodexInvestigation(null);
     setInvestigationHistory([]);
+    setBaselineStatus(null);
     setExecutionRun(null);
     setExecutionCapability(false);
     setExecutionEvents('');
@@ -534,6 +549,38 @@ const AdminFeedbackPage: React.FC = () => {
       await loadOverview();
     } catch (err) {
       setError(err instanceof Error ? err.message : '方案生成失败');
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const reinvestigateOnCurrentBaseline = async () => {
+    if (!selectedIssue || !workPlan || planning) return;
+    if (!window.confirm('确认退回这份旧基线方案，并按服务器当前干净 commit 重新调查？旧方案会保留在调查历史中，不会启动代码修改。')) return;
+    setPlanning(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/admin/feedback/issues/${selectedIssue.id}/work-plan/reinvestigate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision_note: revisionNote }),
+      });
+      const payload = await readJson(response);
+      setWorkPlan(payload.work_plan || null);
+      setCodexInvestigation(payload.codex_investigation || null);
+      setBaselineStatus(payload.baseline_status || null);
+      if (payload.codex_investigation) {
+        setInvestigationHistory(current => [
+          ...current.filter(item => item.id !== payload.codex_investigation.id),
+          payload.codex_investigation,
+        ]);
+      }
+      applyIssueUpdate(payload.issue);
+      setRevisionNote('');
+      setEditingPlan(false);
+      await loadOverview();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '按当前基线重新调查失败');
     } finally {
       setPlanning(false);
     }
@@ -922,6 +969,23 @@ const AdminFeedbackPage: React.FC = () => {
                     ? <span className={`is-${workPlan.status}`}>{workPlanStatusLabels[workPlan.status] || workPlan.status}</span>
                     : codexInvestigation && <span className={`is-${codexInvestigation.status}`}>{codexInvestigationStatusLabels[codexInvestigation.status] || codexInvestigation.status}</span>}
                 </div>
+                {workPlan && baselineStatus && (
+                  <div className={`admin-feedback__baseline-status ${baselineStatus.executable ? 'is-ready' : 'is-blocked'}`}>
+                    <div>
+                      <strong>{baselineStatus.executable ? '执行基线已就绪' : '当前方案不能直接执行'}</strong>
+                      <p>{baselineStatus.message}</p>
+                      <div>
+                        <code>方案 {(baselineStatus.plan_base_sha || '').slice(0, 12) || '未绑定'}{baselineStatus.investigated_dirty ? ' · 调查时有未提交改动' : ''}</code>
+                        <code>当前 {(baselineStatus.current_base_sha || '').slice(0, 12) || '不可用'} · {baselineStatus.current_clean ? '工作树干净' : '工作树不干净'}</code>
+                      </div>
+                    </div>
+                    {!baselineStatus.executable && baselineStatus.current_clean && canOperatePlans && ['draft', 'approved'].includes(workPlan.status) && (
+                      <button className="is-secondary" onClick={() => void reinvestigateOnCurrentBaseline()} disabled={planning || investigationActive}>
+                        {investigationActive ? '正在重新调查…' : '按当前干净基线重新调查'}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <section className="admin-feedback__plan-chat">
                   <div className="admin-feedback__plan-chat-head">
                     <div><FaComments /><strong>方案协作对话</strong></div>
@@ -1065,7 +1129,7 @@ const AdminFeedbackPage: React.FC = () => {
                     </details>
                     <div className="admin-feedback__work-plan-actions">
                       {canOperatePlans && workPlan.status === 'draft' && <button onClick={() => void approveWorkPlan()} disabled={planning}><FaClipboardCheck /> 确认方案</button>}
-                      {canControlExecution && executionCapability && workPlan.status === 'approved' && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 启动受控 Codex</button>}
+                      {canControlExecution && executionCapability && workPlan.status === 'approved' && baselineStatus?.executable !== false && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 启动受控 Codex</button>}
                       {canControlExecution && executionCapability && workPlan.status === 'queued' && !executionRun && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 接入受控执行</button>}
                       {canControlExecution && executionCapability && workPlan.status === 'queued' && executionRun && ['failed', 'stopped'].includes(executionRun.status) && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 重新执行</button>}
                       {canOperatePlans && workPlan.status === 'draft' && <button className="is-secondary" onClick={beginPlanEdit} disabled={planning}>高级结构化编辑</button>}

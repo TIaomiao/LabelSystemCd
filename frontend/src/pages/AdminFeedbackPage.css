@@ -382,6 +382,17 @@
 .admin-feedback__work-plan-head > span.is-pending,
 .admin-feedback__work-plan-head > span.is-running { color: var(--fb-sea); border-color: rgba(34,162,195,.45); }
 .admin-feedback__work-plan-head > span.is-failed { color: #ffd0d0; border-color: rgba(224,123,123,.5); }
+.admin-feedback__baseline-status { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--fb-line); }
+.admin-feedback__baseline-status.is-ready { background: rgba(168,203,78,.055); }
+.admin-feedback__baseline-status.is-blocked { background: rgba(224,123,123,.075); }
+.admin-feedback__baseline-status > div:first-child { min-width: 0; }
+.admin-feedback__baseline-status strong { color: var(--fb-text); font-size: 13px; }
+.admin-feedback__baseline-status.is-ready strong { color: var(--fb-lime); }
+.admin-feedback__baseline-status.is-blocked strong { color: #ffd0d0; }
+.admin-feedback__baseline-status p { margin: 4px 0 6px; color: var(--fb-text); font-size: 12px; line-height: 1.5; }
+.admin-feedback__baseline-status > div > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-feedback__baseline-status code { border: 1px solid rgba(146,179,165,.18); border-radius: 3px; padding: 3px 6px; color: var(--fb-muted); background: rgba(0,0,0,.12); font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
+.admin-feedback__baseline-status > button { flex: 0 0 auto; }
 .admin-feedback__plan-chat { padding: 13px 14px; border-bottom: 1px solid var(--fb-line); background: #10191c; }
 .admin-feedback__plan-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .admin-feedback__plan-chat-head > div { display: flex; align-items: center; gap: 7px; color: var(--fb-sea); }
@@ -563,7 +574,8 @@
   .admin-feedback__list { max-height: 260px; border-right: 0; border-bottom: 1px solid var(--fb-line); }
   .admin-feedback__plan-columns { grid-template-columns: 1fr; }
   .admin-feedback__plan-chat-head,
-  .admin-feedback__plan-chat-composer > div { align-items: flex-start; flex-direction: column; }
+  .admin-feedback__plan-chat-composer > div,
+  .admin-feedback__baseline-status { align-items: flex-start; flex-direction: column; }
   .admin-feedback__plan-chat-message { width: 94%; }
   .admin-feedback__issue-editor > div:first-child { grid-template-columns: 1fr; }
 }

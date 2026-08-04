@@ -77,6 +77,47 @@ class FeedbackExecutionWorkflowTests(unittest.TestCase):
                 routes._queue_feedback_execution(issue, plan, self.user_id)
             self.assertEqual(FeedbackExecutionRun.query.count(), 0)
 
+    def test_baseline_status_distinguishes_current_clean_head_from_dirty_investigation(self):
+        with self.app.app_context():
+            _issue, plan = self._issue_and_plan({
+                'base_sha': 'a' * 40,
+                'branch': 'main',
+                'dirty_worktree': True,
+                'allowed_paths': ['frontend/src/App.tsx'],
+            })
+            with patch.object(routes, 'repository_snapshot', return_value={
+                'base_sha': 'b' * 40,
+                'branch': 'main',
+                'dirty': False,
+                'tracked_changes': [],
+            }):
+                status = routes._feedback_plan_baseline_status(plan)
+
+            self.assertTrue(status['current_clean'])
+            self.assertFalse(status['executable'])
+            self.assertEqual(status['reason'], 'investigation_was_dirty')
+            self.assertEqual(status['plan_base_sha'], 'a' * 40)
+            self.assertEqual(status['current_base_sha'], 'b' * 40)
+
+    def test_baseline_status_accepts_plan_bound_to_current_clean_head(self):
+        with self.app.app_context():
+            _issue, plan = self._issue_and_plan({
+                'base_sha': 'c' * 40,
+                'branch': 'main',
+                'dirty_worktree': False,
+                'allowed_paths': ['frontend/src/App.tsx'],
+            })
+            with patch.object(routes, 'repository_snapshot', return_value={
+                'base_sha': 'c' * 40,
+                'branch': 'main',
+                'dirty': False,
+                'tracked_changes': [],
+            }):
+                status = routes._feedback_plan_baseline_status(plan)
+
+            self.assertTrue(status['executable'])
+            self.assertEqual(status['reason'], 'ready')
+
     def test_issue_serialization_includes_reporter_and_latest_investigation(self):
         with self.app.app_context():
             issue = FeedbackIssue(

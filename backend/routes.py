@@ -34,6 +34,7 @@ from codex_feedback_runner import (
     CodexInvestigationError,
     investigation_markdown,
     investigation_to_proposal,
+    repository_snapshot,
     run_codex_investigation,
 )
 from codex_feedback_executor import (
@@ -4395,6 +4396,58 @@ def _latest_feedback_codex_run(issue_id):
     )
 
 
+def _feedback_plan_baseline_status(plan):
+    proposal = plan.proposal_json if plan is not None and isinstance(plan.proposal_json, dict) else {}
+    plan_base_sha = str(proposal.get('base_sha') or '')
+    investigated_dirty = bool(proposal.get('dirty_worktree'))
+    try:
+        snapshot = repository_snapshot()
+    except CodexInvestigationError as exc:
+        return {
+            'available': False,
+            'executable': False,
+            'current_clean': False,
+            'current_base_sha': '',
+            'plan_base_sha': plan_base_sha,
+            'investigated_dirty': investigated_dirty,
+            'reason': 'repository_unavailable',
+            'message': str(exc),
+        }
+    current_base_sha = str(snapshot.get('base_sha') or '')
+    current_clean = not bool(snapshot.get('dirty'))
+    executable = bool(
+        plan_base_sha
+        and not investigated_dirty
+        and current_clean
+        and plan_base_sha == current_base_sha
+    )
+    if investigated_dirty:
+        reason = 'investigation_was_dirty'
+        message = '该方案调查时仓库含未提交改动，必须在当前干净基线上重新调查。'
+    elif not current_clean:
+        reason = 'current_repository_dirty'
+        message = '当前主仓库含未提交或未跟踪改动，需先建立干净基线。'
+    elif not plan_base_sha:
+        reason = 'plan_base_missing'
+        message = '该方案没有绑定有效的 Git 基线，必须重新调查。'
+    elif plan_base_sha != current_base_sha:
+        reason = 'plan_base_stale'
+        message = '当前仓库已经前进到新的 commit，旧方案必须重新调查。'
+    else:
+        reason = 'ready'
+        message = '方案与当前干净 Git 基线一致，可以启动受控执行。'
+    return {
+        'available': True,
+        'executable': executable,
+        'current_clean': current_clean,
+        'current_base_sha': current_base_sha,
+        'plan_base_sha': plan_base_sha,
+        'investigated_dirty': investigated_dirty,
+        'reason': reason,
+        'message': message,
+    }
+
+
 def _feedback_codex_history(issue_id, *, before_run_id=None, limit=8, completed_only=False):
     query = FeedbackCodexRun.query.filter_by(issue_id=issue_id, phase='investigation')
     if before_run_id is not None:
@@ -5750,6 +5803,7 @@ def register_routes(app):
         execution = _latest_feedback_execution(issue.id)
         return jsonify({
             'work_plan': plan.to_dict() if plan else None,
+            'baseline_status': _feedback_plan_baseline_status(plan) if plan else None,
             'codex_investigation': investigation.to_dict() if investigation else None,
             'investigation_history': [
                 item.to_dict()
@@ -5762,6 +5816,84 @@ def register_routes(app):
                 'mode': 'isolated-worktree-review',
             },
         })
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/reinvestigate', methods=['POST'])
+    @require_feedback_operator
+    def reinvestigate_feedback_work_plan(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        plan = FeedbackWorkPlan.query.filter_by(issue_id=issue_id).first()
+        if issue is None or plan is None:
+            return jsonify({'error': 'Work plan not found'}), 404
+        if plan.status not in {'draft', 'approved'}:
+            return jsonify({'error': '当前方案已有执行记录，请先完成或退回代码审查'}), 409
+        active_execution = (
+            FeedbackExecutionRun.query
+            .filter(
+                FeedbackExecutionRun.work_plan_id == plan.id,
+                FeedbackExecutionRun.status.in_([
+                    'queued', 'preparing', 'running', 'stopping', 'review_ready',
+                    'review_approved', 'merging',
+                ]),
+            )
+            .order_by(FeedbackExecutionRun.id.desc())
+            .first()
+        )
+        if active_execution is not None:
+            return jsonify({'error': '当前已有受控执行或候选改动，不能覆盖其批准基线'}), 409
+        active_investigation = (
+            FeedbackCodexRun.query
+            .filter(
+                FeedbackCodexRun.issue_id == issue.id,
+                FeedbackCodexRun.phase == 'investigation',
+                FeedbackCodexRun.status.in_(['pending', 'running']),
+            )
+            .order_by(FeedbackCodexRun.id.desc())
+            .first()
+        )
+        if active_investigation is not None:
+            return jsonify({
+                'work_plan': plan.to_dict(),
+                'codex_investigation': active_investigation.to_dict(include_result=False),
+                'baseline_status': _feedback_plan_baseline_status(plan),
+                'issue': issue.to_dict(include_user=True),
+                'created': False,
+            }), 202
+        baseline = _feedback_plan_baseline_status(plan)
+        if not baseline.get('available'):
+            return jsonify({'error': baseline.get('message') or '当前无法读取 Git 基线'}), 503
+        if not baseline.get('current_clean'):
+            return jsonify({'error': '当前主仓库仍有未提交或未跟踪改动，请先让服务器 Codex 建立干净基线'}), 409
+        previous_base = str(baseline.get('plan_base_sha') or '')[:12] or '未知'
+        current_base = str(baseline.get('current_base_sha') or '')[:12]
+        user_note = str((request.json or {}).get('revision_note') or '').strip()[:2500]
+        revision_note = (
+            f'请按当前干净 Git 基线 {current_base} 重新调查。旧方案绑定 {previous_base}'
+            f'（原因：{baseline.get("reason") or "基线不一致"}），不得沿用旧方案的可写文件范围。'
+            '保留仍然成立的需求判断，重新核对真实受版本控制源码、实现工作量、风险和验证步骤。'
+        )
+        if user_note:
+            revision_note += f'\n\n管理员补充：{user_note}'
+        plan.status = 'draft'
+        plan.approved_by_id = None
+        plan.approved_at = None
+        plan.queue_note = ''
+        plan.execution_note = ''
+        plan.updated_at = datetime.utcnow()
+        issue.status = 'reviewing'
+        issue.updated_at = plan.updated_at
+        try:
+            run, created = _queue_feedback_codex_investigation(issue, current_user.id, revision_note)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('Failed to re-investigate Feedback Codex plan on clean baseline')
+            return jsonify({'error': '重新调查暂时无法入队，旧方案未被覆盖，请稍后重试'}), 503
+        return jsonify({
+            'work_plan': plan.to_dict(),
+            'codex_investigation': run.to_dict(include_result=False),
+            'baseline_status': _feedback_plan_baseline_status(plan),
+            'issue': issue.to_dict(include_user=True),
+            'created': created,
+        }), 202
 
     @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/generate', methods=['POST'])
     @require_feedback_operator
