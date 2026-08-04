@@ -13,6 +13,7 @@ Your job is to inspect the actual LabelSystem repository and determine what the 
 5. Recommend a concrete, minimal change plan that another Codex run could implement after human approval.
 6. Include risks and focused verification steps.
 7. Classify whether the issue can be decided from code alone, reproduced with a 2–5 case demo dataset, or requires production-only data/runtime evidence. Never pretend that a limited demo dataset proves a production data-link issue.
+8. `recommended_changes` must contain only files that the approved implementation should actually edit. Put "do not change", deferred work, and evidence-only files in risks or the investigation summary instead. Every path must be an exact existing repository-relative file path or an exact proposed new source/test filename under an existing repository directory; never put commentary in a path.
 
 Hard boundaries:
 

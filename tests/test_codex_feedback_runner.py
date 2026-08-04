@@ -78,11 +78,33 @@ class CodexFeedbackRunnerTest(unittest.TestCase):
             'line_end': 1,
             'reason': '不应保留',
         })
+        raw['evidence'].append({
+            'path': 'apps/web/src (source currently not tracked)',
+            'line_start': 1,
+            'line_end': 1,
+            'reason': '带解释文字的伪路径不应保留',
+        })
+        raw['recommended_changes'].extend([
+            {
+                'path': 'apps/api/services/dicom_indexer.py',
+                'change': 'Do not change this importer from the report alone.',
+                'rationale': '这里只是调查约束，不是实施动作。',
+            },
+            {
+                'path': 'apps/web/src/role-management-bridge.ts',
+                'change': '新增受维护的角色同步入口。',
+                'rationale': '允许现有目录下的精确新源码路径。',
+            },
+        ])
 
         result = normalize_investigation_result(raw)
 
         self.assertEqual(len(result['evidence']), 1)
         self.assertEqual(result['evidence'][0]['line_start'], 16)
+        self.assertEqual(
+            [item['path'] for item in result['recommended_changes']],
+            ['frontend/src/pages/AdminFeedbackPage.tsx', 'apps/web/src/role-management-bridge.ts'],
+        )
         self.assertEqual(result['execution_scope'], 'minimal_candidate')
         self.assertEqual(result['reproducibility'], 'code_only')
 

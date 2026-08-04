@@ -7,6 +7,7 @@ from urllib.parse import quote
 from routes import register_routes
 from extensions import db, login_manager
 from models import User, FeedbackExecutionRun
+from feedback_recovery import recover_interrupted_feedback_investigations
 
 app = Flask(__name__)
 
@@ -328,6 +329,13 @@ def _ensure_user_schema():
                 WHERE status IN ('queued', 'preparing', 'running', 'stopping')
                 """
             )
+
+        investigation_columns = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(feedback_codex_run)").fetchall()
+        }
+        if investigation_columns:
+            recover_interrupted_feedback_investigations(conn)
 
 # Register Hospital Browser Blueprint
 from hospital_browser.routes import hospital_browser_bp

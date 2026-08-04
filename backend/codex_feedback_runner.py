@@ -15,6 +15,12 @@ SCHEMA_PATH = Path(__file__).resolve().parent / 'prompts' / 'workstation_codex_i
 LLM_GATEWAY_CONFIG_PATH = Path(__file__).resolve().parent / 'instance' / 'llm_gateway_config.json'
 ALLOWED_SCOPES = {'guidance_only', 'minimal_candidate', 'needs_review', 'large_change'}
 ALLOWED_REPRODUCIBILITY = {'code_only', 'demo_cases', 'production_data_required'}
+ALLOWED_NEW_SOURCE_SUFFIXES = {
+    '.css', '.html', '.js', '.jsx', '.json', '.md', '.mjs', '.py', '.sh', '.ts', '.tsx', '.yaml', '.yml',
+}
+NON_ACTIONABLE_CHANGE_PREFIXES = (
+    'do not change', 'no change', '不修改', '不要修改', '无需修改', '不应修改',
+)
 
 
 class CodexInvestigationError(RuntimeError):
@@ -112,6 +118,25 @@ def _normalize_text(value: Any) -> str:
     return str(value or '').strip()
 
 
+def _valid_result_path(path: str, *, allow_new: bool) -> bool:
+    candidate = Path(path)
+    if not path or candidate.is_absolute() or '..' in candidate.parts:
+        return False
+    resolved = PROJECT_ROOT / candidate
+    if resolved.is_file():
+        return True
+    return bool(
+        allow_new
+        and resolved.parent.is_dir()
+        and resolved.suffix.lower() in ALLOWED_NEW_SOURCE_SUFFIXES
+    )
+
+
+def _is_actionable_change(change: str) -> bool:
+    normalized = change.strip().lower()
+    return bool(normalized) and not normalized.startswith(NON_ACTIONABLE_CHANGE_PREFIXES)
+
+
 def normalize_investigation_result(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise CodexInvestigationError('Codex 未返回结构化仓库调查结果')
@@ -126,7 +151,7 @@ def normalize_investigation_result(raw: Any) -> dict[str, Any]:
             line_end = max(line_start, int(item.get('line_end') or line_start))
         except (TypeError, ValueError):
             continue
-        if path and reason and '..' not in Path(path).parts:
+        if reason and _valid_result_path(path, allow_new=False):
             evidence.append({
                 'path': path[:1000],
                 'line_start': line_start,
@@ -140,7 +165,7 @@ def normalize_investigation_result(raw: Any) -> dict[str, Any]:
         path = _normalize_text(item.get('path')).lstrip('/')
         change = _normalize_text(item.get('change'))
         rationale = _normalize_text(item.get('rationale'))
-        if path and change and '..' not in Path(path).parts:
+        if rationale and _valid_result_path(path, allow_new=True) and _is_actionable_change(change):
             changes.append({'path': path[:1000], 'change': change[:6000], 'rationale': rationale[:6000]})
     risks = []
     for item in raw.get('risks') if isinstance(raw.get('risks'), list) else []:

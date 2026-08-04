@@ -14,6 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
 import routes
 from codex_feedback_executor import CodexExecutionError
 from extensions import db
+from feedback_recovery import recover_interrupted_feedback_investigations
 from models import FeedbackCodexRun, FeedbackExecutionRun, FeedbackIssue, FeedbackSession, FeedbackWorkPlan, User
 
 
@@ -101,6 +102,32 @@ class FeedbackExecutionWorkflowTests(unittest.TestCase):
             self.assertEqual(payload['reporter_username'], 'admin')
             self.assertEqual(payload['codex_investigation']['id'], run.id)
             self.assertNotIn('worktree_path', payload)
+
+    def test_restart_recovery_fails_closed_for_active_investigations(self):
+        with self.app.app_context():
+            issue = FeedbackIssue(
+                session_id=self.session_id,
+                reporter_id=self.user_id,
+                category='bug',
+                title='interrupted investigation',
+            )
+            db.session.add(issue)
+            db.session.flush()
+            pending = FeedbackCodexRun(issue_id=issue.id, status='pending', phase='investigation')
+            running = FeedbackCodexRun(issue_id=issue.id, status='running', phase='investigation')
+            completed = FeedbackCodexRun(issue_id=issue.id, status='completed', phase='investigation')
+            db.session.add_all([pending, running, completed])
+            db.session.commit()
+
+            with db.engine.begin() as connection:
+                recovered = recover_interrupted_feedback_investigations(connection)
+            db.session.expire_all()
+
+            self.assertEqual(recovered, 2)
+            self.assertEqual(pending.status, 'failed')
+            self.assertEqual(pending.phase, 'interrupted_by_restart')
+            self.assertIsNotNone(running.finished_at)
+            self.assertEqual(completed.status, 'completed')
 
     def test_queue_freezes_plan_snapshot_and_starts_one_worker(self):
         with self.app.app_context():
