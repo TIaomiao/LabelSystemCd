@@ -1,12 +1,25 @@
 import csv
 import sys
+import tempfile
+import unittest
+from pathlib import Path
 
 from flask import Flask
 
 
 sys.path.insert(0, "backend")
 
-from cvi_workstation import _case_display_identity, _iter_case_dirs, _looks_like_dicom, _manifest_search_matches
+from cvi_workstation import (
+    _case_display_identity,
+    _configured_functional_datasets,
+    _iter_case_dirs,
+    _looks_like_dicom,
+    _manifest_search_matches,
+    _refresh_case_catalog,
+    _sequence_summary,
+)
+from extensions import db
+from models import CviCaseCatalog
 
 
 def test_deep_case_directories_use_anonymous_manifest_ids(tmp_path):
@@ -52,3 +65,123 @@ def test_deep_case_directories_use_anonymous_manifest_ids(tmp_path):
             "primary_id_label": "登记号",
             "primary_id": "REG-001",
         }
+
+
+class CatalogShapeTest(unittest.TestCase):
+    def test_numeric_series_directory_stays_inside_private_top_level_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "pah-test"
+            series = root / "PAH-5" / "901029"
+            series.mkdir(parents=True)
+            (series / "1_0.dcm").touch()
+            (root / "PAH-5" / "StudyInfo.dat").touch()
+
+            app = Flask(__name__)
+            app.config["DATA_ROOT"] = str(tmp_path / "missing")
+            app.config["CVI_LIBRARY_MULTICENTER_ROOTS"] = [
+                {
+                    "dataset": "CMR_SCS_PAH_TEST",
+                    "label": "PAH curvature acceptance",
+                    "path": str(root),
+                    "case_dir_contains_dicoms": True,
+                    "private_by_assignment": True,
+                }
+            ]
+
+            with app.app_context():
+                rows = list(_iter_case_dirs("functional", ["CMR_SCS_PAH_TEST"]))
+                configured = _configured_functional_datasets()
+
+            self.assertEqual(
+                [(dataset, case_id, path.name) for _, dataset, case_id, path in rows],
+                [("CMR_SCS_PAH_TEST", "PAH-5", "PAH-5")],
+            )
+            self.assertTrue(configured[0]["private_by_assignment"])
+            sequences, dicom_count, has_dicom = _sequence_summary(root / "PAH-5")
+            self.assertEqual(sequences, [{"name": "901029", "dicom_count": 1}])
+            self.assertEqual(dicom_count, 1)
+            self.assertTrue(has_dicom)
+
+    def test_numbered_pah_cases_keep_split_sax_series_inside_each_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "first-sax-category"
+            (root / "001" / "601").mkdir(parents=True)
+            (root / "001" / "601" / "1_0.dcm").touch()
+            (root / "014" / "14").mkdir(parents=True)
+            (root / "014" / "15").mkdir(parents=True)
+            (root / "014" / "14" / "1_0.dcm").touch()
+            (root / "014" / "15" / "1_0.dcm").touch()
+
+            app = Flask(__name__)
+            app.config["DATA_ROOT"] = str(tmp_path / "missing")
+            app.config["CVI_LIBRARY_MULTICENTER_ROOTS"] = [
+                {
+                    "dataset": "CMR_SCS_PAH_1",
+                    "label": "SCS PAH first SAX category",
+                    "path": str(root),
+                    "case_dir_contains_dicoms": True,
+                    "private_by_assignment": True,
+                }
+            ]
+
+            with app.app_context():
+                rows = list(_iter_case_dirs("functional", ["CMR_SCS_PAH_1"]))
+                configured = _configured_functional_datasets()
+
+            self.assertEqual(
+                [(dataset, case_id, path.name) for _, dataset, case_id, path in rows],
+                [
+                    ("CMR_SCS_PAH_1", "001", "001"),
+                    ("CMR_SCS_PAH_1", "014", "014"),
+                ],
+            )
+            self.assertTrue(configured[0]["private_by_assignment"])
+            sequences, dicom_count, has_dicom = _sequence_summary(root / "014")
+            self.assertEqual(
+                sequences,
+                [
+                    {"name": "14", "dicom_count": 1},
+                    {"name": "15", "dicom_count": 1},
+                ],
+            )
+            self.assertEqual(dicom_count, 2)
+            self.assertTrue(has_dicom)
+
+
+class CatalogRefreshTest(unittest.TestCase):
+    def test_catalog_refresh_scans_then_replaces_stale_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "center"
+            sequence = root / "case-new" / "SAX"
+            sequence.mkdir(parents=True)
+            (sequence / "frame-001.dcm").touch()
+
+            app = Flask(__name__)
+            app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite://"
+            app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+            app.config["DATA_ROOT"] = str(tmp_path / "missing-annotation")
+            app.config["CVI_LIBRARY_MULTICENTER_ROOTS"] = [
+                {"dataset": "CENTER_A", "label": "Center A", "path": str(root)}
+            ]
+            db.init_app(app)
+
+            with app.app_context():
+                db.create_all()
+                db.session.add(CviCaseCatalog(
+                    source="functional",
+                    dataset="CENTER_A",
+                    case_id="case-stale",
+                    full_id="CENTER_A/case-stale",
+                    path=str(root / "case-stale"),
+                ))
+                db.session.commit()
+
+                self.assertEqual(_refresh_case_catalog("functional", ["CENTER_A"]), 1)
+                rows = CviCaseCatalog.query.order_by(CviCaseCatalog.case_id).all()
+
+                self.assertEqual([row.case_id for row in rows], ["case-new"])
+                self.assertEqual(rows[0].dicom_count, 1)
+                self.assertTrue(rows[0].has_dicom)

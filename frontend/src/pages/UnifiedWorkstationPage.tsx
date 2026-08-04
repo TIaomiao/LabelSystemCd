@@ -102,8 +102,7 @@ const sourceLabel: Record<string, string> = {
 };
 
 const UKB_AGENT_WORKSTATION_URL =
-  ((import.meta as any).env?.VITE_UKB_AGENT_WORKSTATION_URL as string | undefined)
-  || 'https://tender-doe-trial-dark.trycloudflare.com/';
+  (((import.meta as any).env?.VITE_UKB_AGENT_WORKSTATION_URL as string | undefined) || '').trim();
 
 const mergeSourceOptions = (serverSources: CviSource[]): CviSource[] => serverSources || [];
 
@@ -256,6 +255,33 @@ const assessmentModules = new Set<ModuleKey>([
 
 const CASE_FETCH_LIMIT = 300;
 const CASE_FETCH_LIMIT_FALLBACK = 5000;
+const FEEDBACK_PANEL_DEFAULT_WIDTH = 540;
+const FEEDBACK_PANEL_MIN_WIDTH = 420;
+const FEEDBACK_PANEL_MAX_WIDTH = 760;
+const FEEDBACK_PANEL_WIDTH_KEY = 'cmr-feedback-panel-width';
+
+const feedbackPanelViewportMax = () => {
+  if (typeof window === 'undefined') return FEEDBACK_PANEL_MAX_WIDTH;
+  return Math.min(
+    FEEDBACK_PANEL_MAX_WIDTH,
+    Math.max(FEEDBACK_PANEL_MIN_WIDTH, Math.floor(window.innerWidth * 0.42))
+  );
+};
+
+const clampFeedbackPanelWidth = (width: number) => (
+  Math.min(feedbackPanelViewportMax(), Math.max(FEEDBACK_PANEL_MIN_WIDTH, Math.round(width)))
+);
+
+const readFeedbackPanelWidth = () => {
+  try {
+    const stored = Number(window.localStorage.getItem(FEEDBACK_PANEL_WIDTH_KEY));
+    return Number.isFinite(stored) && stored > 0
+      ? clampFeedbackPanelWidth(stored)
+      : FEEDBACK_PANEL_DEFAULT_WIDTH;
+  } catch {
+    return FEEDBACK_PANEL_DEFAULT_WIDTH;
+  }
+};
 
 const UnifiedWorkstationPage: React.FC = () => {
   const navigate = useNavigate();
@@ -281,28 +307,14 @@ const UnifiedWorkstationPage: React.FC = () => {
   const [casePanelCollapsed, setCasePanelCollapsed] = useState(false);
   const [showChangeLog, setShowChangeLog] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackPanelWidth, setFeedbackPanelWidth] = useState(readFeedbackPanelWidth);
+  const [workstationReloadKey, setWorkstationReloadKey] = useState(0);
   const workstationFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const selectedCase = useMemo(
     () => cases.find(item => item.id === selectedCaseId) || null,
     [cases, selectedCaseId]
   );
-  const selectedCaseIndex = useMemo(
-    () => cases.findIndex(item => item.id === selectedCaseId),
-    [cases, selectedCaseId]
-  );
-  const previousCase = useMemo(() => {
-    if (!cases.length) return null;
-    if (selectedCaseIndex < 0) return cases[0];
-    if (cases.length <= 1) return null;
-    return cases[(selectedCaseIndex - 1 + cases.length) % cases.length];
-  }, [cases, selectedCaseIndex]);
-  const nextCase = useMemo(() => {
-    if (!cases.length) return null;
-    if (selectedCaseIndex < 0) return cases[0];
-    if (cases.length <= 1) return null;
-    return cases[(selectedCaseIndex + 1) % cases.length];
-  }, [cases, selectedCaseIndex]);
   const embeddedWorkstationUrl = useMemo(() => {
     const separator = workstationUrl.includes('?') ? '&' : '?';
     return `${workstationUrl}${separator}embedded=1`;
@@ -335,6 +347,20 @@ const UnifiedWorkstationPage: React.FC = () => {
         document.documentElement.removeAttribute('data-theme');
       }
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FEEDBACK_PANEL_WIDTH_KEY, String(feedbackPanelWidth));
+    } catch {
+      // The panel still resizes for this session when storage is unavailable.
+    }
+  }, [feedbackPanelWidth]);
+
+  useEffect(() => {
+    const handleResize = () => setFeedbackPanelWidth(current => clampFeedbackPanelWidth(current));
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   useEffect(() => {
@@ -446,6 +472,36 @@ const UnifiedWorkstationPage: React.FC = () => {
     window.addEventListener('mouseup', handleUp);
   }, [casePanelCollapsed, casePanelWidth, resizeCasePanel]);
 
+  const resizeFeedbackPanel = useCallback((nextWidth: number) => {
+    setFeedbackPanelWidth(clampFeedbackPanelWidth(nextWidth));
+  }, []);
+
+  const startFeedbackPanelResize = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = feedbackPanelWidth;
+    document.body.classList.add('uws-is-resizing');
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      resizeFeedbackPanel(startWidth + startX - moveEvent.clientX);
+    };
+
+    const handleUp = () => {
+      document.body.classList.remove('uws-is-resizing');
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+  }, [feedbackPanelWidth, resizeFeedbackPanel]);
+
+  const handleFeedbackResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    resizeFeedbackPanel(feedbackPanelWidth + (event.key === 'ArrowLeft' ? 24 : -24));
+  }, [feedbackPanelWidth, resizeFeedbackPanel]);
+
   const flushCurrentContours = useCallback(async () => {
     try {
       await flushCviIframeAutosave(workstationFrameRef.current);
@@ -472,6 +528,7 @@ const UnifiedWorkstationPage: React.FC = () => {
       const studyId = payload.study_id;
       setSelectedCaseId(caseItem.id);
       setWorkstationUrl(`/cvi-workstation-app/study/${studyId}/function`);
+      setWorkstationReloadKey(value => value + 1);
       if (switchModule) {
         setSelectedModule('cvi');
       }
@@ -506,14 +563,6 @@ const UnifiedWorkstationPage: React.FC = () => {
       return;
     }
     setSelectedModule(nextModule);
-  };
-
-  const goToNextCase = () => {
-    switchToCase(nextCase);
-  };
-
-  const goToPreviousCase = () => {
-    switchToCase(previousCase);
   };
 
   const caseSubtitle = selectedCase
@@ -561,7 +610,11 @@ const UnifiedWorkstationPage: React.FC = () => {
                 setSelectedCaseId(caseItem.id);
               }}
             >
-              {busy ? '导入中' : selectedModule === 'cvi' ? (caseItem.cvi_study_id ? '打开' : '导入') : '设为当前'}
+              {busy
+                ? '导入中'
+                : selectedModule === 'cvi'
+                  ? (selected && caseItem.cvi_study_id ? '重新打开' : caseItem.cvi_study_id ? '打开' : '导入')
+                  : '设为当前'}
             </button>
           </div>
           <div className="uws-case-meta">
@@ -651,37 +704,11 @@ const UnifiedWorkstationPage: React.FC = () => {
     );
   };
 
-  const renderPatientNav = () => (
-    <div className="uws-patient-nav" aria-label="病例导航">
-      <button
-        className="uws-patient-nav-button"
-        onClick={goToPreviousCase}
-        disabled={!previousCase || openingId === previousCase.id}
-        title={previousCase ? `上一位：${caseDisplayName(previousCase)}` : '没有上一位患者'}
-      >
-        <FaChevronLeft />
-        {openingId === previousCase?.id ? '导入中' : '上一位'}
-      </button>
-      <div className="uws-patient-nav-current" title={caseSubtitle}>
-        <span>当前病例</span>
-        <strong>{caseDisplayName(selectedCase, '未选择')}</strong>
-      </div>
-      <button
-        className="uws-patient-nav-button is-primary"
-        onClick={goToNextCase}
-        disabled={!nextCase || openingId === nextCase.id}
-        title={nextCase ? `下一位：${caseDisplayName(nextCase)}` : '没有下一位患者'}
-      >
-        {openingId === nextCase?.id ? '导入中' : '下一位'}
-        <FaChevronRight />
-      </button>
-    </div>
-  );
-
   const renderWorkArea = () => {
     if (selectedModule === 'cvi') {
       return (
         <iframe
+          key={`${embeddedWorkstationUrl}-${workstationReloadKey}`}
           ref={workstationFrameRef}
           title="CMR Workstation"
           className="uws-frame"
@@ -702,6 +729,16 @@ const UnifiedWorkstationPage: React.FC = () => {
       return <ExperimentResultsPage />;
     }
     if (selectedModule === 'ukbAgent') {
+      if (!UKB_AGENT_WORKSTATION_URL) {
+        return (
+          <div className="uws-empty">
+            <div>
+              <strong>UKB 字段库地址尚未配置</strong>
+              <p>原临时 Cloudflare 隧道地址会随机失效，现已停止硬编码。请在构建前配置稳定的 <code>VITE_UKB_AGENT_WORKSTATION_URL</code>。</p>
+            </div>
+          </div>
+        );
+      }
       return (
         <iframe
           title="UKB Data Workstation"
@@ -737,7 +774,6 @@ const UnifiedWorkstationPage: React.FC = () => {
             </button>
           ))}
         </nav>
-        {renderPatientNav()}
         <div className="uws-userbar">
           <span>{user?.username || 'User'}</span>
           <button
@@ -812,8 +848,8 @@ const UnifiedWorkstationPage: React.FC = () => {
         className={`uws-main${casePanelCollapsed ? ' is-case-collapsed' : ''}`}
         style={{
           gridTemplateColumns: casePanelCollapsed
-            ? `48px minmax(0, 1fr)${feedbackOpen ? ' clamp(390px, 25vw, 460px)' : ''}`
-            : `${casePanelWidth}px minmax(0, 1fr)${feedbackOpen ? ' clamp(390px, 25vw, 460px)' : ''}`
+            ? `48px minmax(0, 1fr)${feedbackOpen ? ` ${feedbackPanelWidth}px` : ''}`
+            : `${casePanelWidth}px minmax(0, 1fr)${feedbackOpen ? ` ${feedbackPanelWidth}px` : ''}`
         }}
       >
         <aside className={`uws-case-panel${casePanelCollapsed ? ' is-collapsed' : ''}`}>
@@ -910,7 +946,7 @@ const UnifiedWorkstationPage: React.FC = () => {
                   <FaSave /> 保存沿用原模块接口
                 </span>
               )}
-              {selectedModule === 'ukbAgent' && (
+              {selectedModule === 'ukbAgent' && UKB_AGENT_WORKSTATION_URL && (
                 <a
                   className="uws-link-button"
                   href={UKB_AGENT_WORKSTATION_URL}
@@ -924,15 +960,43 @@ const UnifiedWorkstationPage: React.FC = () => {
               )}
             </div>
           </div>}
+          {selectedModule === 'functional' && (
+            <div className="uws-capability-note">
+              <FaInfoCircle />
+              <span><strong>应变状态：</strong>当前为基于人工轮廓的实验性 2D 几何 proxy，用于科研验证；不是临床级 feature tracking。</span>
+            </div>
+          )}
+          {selectedModule === 'lge' && (
+            <div className="uws-capability-note">
+              <FaInfoCircle />
+              <span><strong>自动 LGE 状态：</strong>快速分割当前禁用；配置 Tissue|LGE 模型后可使用模型分割，人工勾画与测量不受影响。</span>
+            </div>
+          )}
           <div className={`uws-work-area${workAreaScrollable ? ' is-scroll' : ''}`}>
             {renderWorkArea()}
           </div>
         </section>
         {feedbackOpen && (
-          <FeedbackAssistantPanel
-            pageContext={feedbackPageContext}
-            onClose={() => setFeedbackOpen(false)}
-          />
+          <div className="uws-feedback-panel">
+            <div
+              className="uws-feedback-resizer"
+              onMouseDown={startFeedbackPanelResize}
+              onDoubleClick={() => resizeFeedbackPanel(FEEDBACK_PANEL_DEFAULT_WIDTH)}
+              onKeyDown={handleFeedbackResizeKeyDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整 AI 专家侧栏宽度"
+              aria-valuemin={FEEDBACK_PANEL_MIN_WIDTH}
+              aria-valuemax={feedbackPanelViewportMax()}
+              aria-valuenow={feedbackPanelWidth}
+              tabIndex={0}
+              title="拖动调整宽度，双击恢复默认"
+            />
+            <FeedbackAssistantPanel
+              pageContext={feedbackPageContext}
+              onClose={() => setFeedbackOpen(false)}
+            />
+          </div>
         )}
       </div>
     </div>

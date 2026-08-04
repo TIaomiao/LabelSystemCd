@@ -1,0 +1,18 @@
+{
+  "name": "@labelsystem/cvi-workstation-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/run-tool.mjs vite --config vite.config.mjs",
+    "typecheck": "node scripts/run-tool.mjs tsc -p tsconfig.json --noEmit",
+    "test": "node tests/run.mjs",
+    "bundle": "node scripts/run-tool.mjs vite build --config vite.config.mjs",
+    "build": "npm run typecheck && npm run test && npm run bundle && node scripts/verify-staging.mjs",
+    "build:install": "npm run build && node scripts/verify-staging.mjs && node scripts/install-staging.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2",
+    "vite": "^5.1.4"
+  }
+}

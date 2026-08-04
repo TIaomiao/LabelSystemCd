@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -901,22 +902,58 @@ def _validate_contours_for_save(payload: dict) -> None:
                 raise ValueError(f"轮廓 {frame_key}/exclude_regions[{region_index}] 存在自交，请撤销或重画后再保存。")
 
 
-def _upsert_contours(series_id: int, module: str, payload: dict) -> None:
+def _read_contours_for_update(conn, series_id: int, module: str) -> tuple[dict | None, str | None]:
+    row = conn.execute(
+        "SELECT payload_json, updated_at FROM contours WHERE series_id = ? AND module = ?",
+        (series_id, module),
+    ).fetchone()
+    if row is None:
+        return None, None
+    payload = loads(row["payload_json"], {})
+    return (payload if isinstance(payload, dict) else {}), row["updated_at"]
+
+
+def _write_contours_in_transaction(
+    conn,
+    series_id: int,
+    module: str,
+    payload: dict,
+    *,
+    exists: bool,
+) -> None:
+    updated_at = utcnow()
+    if exists:
+        conn.execute(
+            "UPDATE contours SET payload_json = ?, updated_at = ? WHERE series_id = ? AND module = ?",
+            (dumps(payload), updated_at, series_id, module),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO contours (series_id, module, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+            (series_id, module, dumps(payload), updated_at),
+        )
+
+
+def _upsert_contours(series_id: int, module: str, payload: dict) -> dict:
+    """Persist a generic contour write without allowing it to replace manual curvature.
+
+    The final read/merge/write deliberately happens below ``BEGIN IMMEDIATE``.  A
+    legacy PUT or model job may have prepared ``payload`` from an old snapshot;
+    preserving curvature before entering this transaction is therefore not
+    sufficient on its own.
+    """
     with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT id FROM contours WHERE series_id = ? AND module = ?",
-            (series_id, module),
-        ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE contours SET payload_json = ?, updated_at = ? WHERE series_id = ? AND module = ?",
-                (dumps(payload), utcnow(), series_id, module),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO contours (series_id, module, payload_json, updated_at) VALUES (?, ?, ?, ?)",
-                (series_id, module, dumps(payload), utcnow()),
-            )
+        conn.execute("BEGIN IMMEDIATE")
+        latest, _stored_updated_at = _read_contours_for_update(conn, series_id, module)
+        final_payload = _preserve_curvature_landmarks(latest, deepcopy(payload))
+        _write_contours_in_transaction(
+            conn,
+            series_id,
+            module,
+            final_payload,
+            exists=latest is not None,
+        )
+    return final_payload
 
 
 def _preserve_axis_exclusions(existing: dict | None, payload: dict) -> dict:
@@ -929,6 +966,34 @@ def _preserve_axis_exclusions(existing: dict | None, payload: dict) -> dict:
     for key in ("excluded_slices", "excluded_phases"):
         if key not in payload_settings and isinstance(existing_settings.get(key), list):
             payload_settings[key] = existing_settings[key]
+    return payload
+
+
+def _preserve_fat_threshold_settings(existing: dict | None, payload: dict) -> dict:
+    if not isinstance(existing, dict) or not isinstance(payload, dict):
+        return payload
+    existing_settings = existing.get("settings")
+    payload_settings = payload.setdefault("settings", {})
+    if not isinstance(existing_settings, dict) or not isinstance(payload_settings, dict):
+        return payload
+    for key in ("fat_threshold", "left_atrial_function"):
+        if key not in payload_settings and isinstance(existing_settings.get(key), dict):
+            payload_settings[key] = existing_settings[key]
+    return payload
+
+
+def _preserve_curvature_landmarks(
+    existing: dict | None,
+    payload: dict,
+) -> dict:
+    """Keep manual four-point input writable only through the dedicated endpoint."""
+    if not isinstance(payload, dict):
+        return payload
+    payload = dict(payload)
+    if isinstance(existing, dict) and "curvature_landmarks" in existing:
+        payload["curvature_landmarks"] = deepcopy(existing.get("curvature_landmarks"))
+    else:
+        payload.pop("curvature_landmarks", None)
     return payload
 
 
@@ -1087,7 +1152,9 @@ def run_job(job_id: int) -> None:
         )
         existing_contours = fetch_contours(job_dict["series_id"], job_dict["module"])
         payload = _preserve_axis_exclusions(existing_contours, payload)
+        payload = _preserve_fat_threshold_settings(existing_contours, payload)
         payload = _preserve_exclude_regions_for_legacy_save(existing_contours, payload)
+        payload = _preserve_curvature_landmarks(existing_contours, payload)
         if _job_should_pause(job_id):
             raise JobPaused("任务已暂停。")
         payload = _merge_contour_metadata(
@@ -1099,7 +1166,9 @@ def run_job(job_id: int) -> None:
             action_origin=job_dict["adapter"],
         )
         _validate_contours_for_save(payload)
-        _upsert_contours(job_dict["series_id"], job_dict["module"], payload)
+        stored_payload = _upsert_contours(job_dict["series_id"], job_dict["module"], payload)
+        if isinstance(stored_payload, dict):
+            payload = stored_payload
         recompute_measurements_for_module(job_dict["series_id"], job_dict["module"])
         with get_conn() as conn:
             conn.execute(
@@ -1258,7 +1327,10 @@ def save_contours(
     actor: dict | None = None,
     action_origin: str | None = "manual",
     source_frame_key: str | None = None,
+    recompute: bool = True,
 ) -> dict:
+    if module != "function" and isinstance(payload, dict) and payload.get("curvature_landmarks") is not None:
+        raise ValueError("室间隔/游离壁曲率四点只能保存到 function 模块。")
     existing = fetch_contours(series_id, module)
     frame_count, point_total = _contour_frame_summary(payload)
     logger.warning(
@@ -1276,6 +1348,8 @@ def save_contours(
             module,
         )
         payload = _preserve_existing_frames_for_empty_manual_save(existing, payload, action_origin)
+    payload = _preserve_curvature_landmarks(existing, payload)
+    payload = _preserve_fat_threshold_settings(existing, payload)
     payload = _strip_transient_save_flags(payload)
     payload = _preserve_exclude_regions_for_legacy_save(existing, payload)
     _validate_contours_for_save(payload)
@@ -1289,6 +1363,73 @@ def save_contours(
         action_origin=action_origin,
         source_frame_key=source_frame_key,
     )
-    _upsert_contours(series_id, module, merged)
-    recompute_measurements_for_module(series_id, module)
+    stored_payload = _upsert_contours(series_id, module, merged)
+    if isinstance(stored_payload, dict):
+        merged = stored_payload
+    if recompute:
+        recompute_measurements_for_module(series_id, module)
     return merged
+
+
+def _save_curvature_landmarks_atomic(
+    series_id: int,
+    landmarks: dict | None,
+    *,
+    actor: dict | None = None,
+) -> dict:
+    """Replace only curvature landmarks while holding the SQLite write lock."""
+    module = "function"
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        latest, stored_updated_at = _read_contours_for_update(conn, series_id, module)
+        payload = deepcopy(latest) if isinstance(latest, dict) else {
+            "series_id": series_id,
+            "module": module,
+            "coordinate_space": "pixel",
+            "source": "manual",
+            "settings": {},
+            "annotation_meta": {},
+            "frame_meta": {},
+            "phase_labels": {},
+            "frames": {},
+        }
+        payload["curvature_landmarks"] = deepcopy(landmarks)
+        merged = _merge_contour_metadata(
+            latest,
+            payload,
+            series_id=series_id,
+            module=module,
+            stored_updated_at=stored_updated_at,
+            actor=actor,
+            action_origin="manual",
+        )
+        _write_contours_in_transaction(
+            conn,
+            series_id,
+            module,
+            merged,
+            exists=latest is not None,
+        )
+    return merged
+
+
+def save_curvature_landmarks(
+    series_id: int,
+    landmarks: dict | None,
+    *,
+    actor: dict | None = None,
+    recompute: bool = True,
+) -> dict:
+    """Update only the manual function curvature landmarks for a SAX cine series."""
+    series = get_series_row(series_id)
+    if str(series.get("role") or "unknown") != "cine_sax":
+        raise ValueError("室间隔/游离壁曲率四点只能保存到 cine_sax 序列。")
+
+    result = _save_curvature_landmarks_atomic(
+        series_id,
+        landmarks,
+        actor=actor,
+    )
+    if recompute:
+        recompute_measurements_for_module(series_id, "function")
+    return result

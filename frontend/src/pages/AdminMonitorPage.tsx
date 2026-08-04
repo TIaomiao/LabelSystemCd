@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import DatasetAccessPanel from '../components/admin/DatasetAccessPanel';
 
 interface DiskUsage {
   total: number;
@@ -215,6 +216,8 @@ interface MonitorData {
   security: {
     assignments_total: number;
     assignments_by_namespace: Record<string, number>;
+    dataset_grants_total: number;
+    dataset_access_audits_total: number;
     media_logs_total: number;
     media_status_counts: Record<string, number>;
     recent_media_logs: MediaLog[];
@@ -235,6 +238,7 @@ const moduleLabels: Record<string, string> = {
 };
 
 const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initialSection }) => {
+  const initialSectionScrolled = useRef(false);
   const [data, setData] = useState<MonitorData | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [assignmentMap, setAssignmentMap] = useState<Record<string, Assignment[]>>({});
@@ -320,12 +324,32 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
   };
 
   useEffect(() => {
-    void loadMonitor();
+    let disposed = false;
+    let timer: number | undefined;
+
+    const pollMonitor = async () => {
+      await loadMonitor();
+      if (!disposed) {
+        timer = window.setTimeout(() => void pollMonitor(), 15000);
+      }
+    };
+
+    void pollMonitor();
     void loadAssignments();
     void loadAssignmentPresets();
-    const timer = window.setInterval(() => void loadMonitor(), 15000);
-    return () => window.clearInterval(timer);
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
+
+  useEffect(() => {
+    if (initialSection !== 'assignments' || !data || initialSectionScrolled.current) return;
+    const target = document.getElementById('dataset-access');
+    if (!target) return;
+    initialSectionScrolled.current = true;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [data, initialSection]);
 
   const saveAssignment = async () => {
     setError('');
@@ -639,7 +663,11 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
             <SummaryCard label="目录扫描项（非去重）" value={totals.rootCases} detail={`CVI 工作站已登记 ${data.data.cvi_catalog.total} 例`} />
             <SummaryCard label="标注记录" value={totals.annotationRecords} detail={`模块累计 ${totals.annotationCases} 例次`} />
             <SummaryCard label="GPU" value={data.system.gpus.length} detail={data.system.gpus.length ? '已检测到显卡状态' : '未返回 nvidia-smi'} />
-            <SummaryCard label="访问控制" value={data.security.assignments_total} detail={`影像日志 ${data.security.media_logs_total} 条，水印${data.security.watermark_enabled ? '开启' : '关闭'}`} />
+            <SummaryCard
+              label="权限关系"
+              value={data.security.dataset_grants_total + data.security.assignments_total}
+              detail={`整库权限 ${data.security.dataset_grants_total} 条 / 病例任务 ${data.security.assignments_total} 条`}
+            />
           </div>
 
           <section style={sectionStyle}>
@@ -678,10 +706,12 @@ const AdminMonitorPage: React.FC<{ initialSection?: 'assignments' }> = ({ initia
             </div>
           </section>
 
+          <DatasetAccessPanel onSaved={loadMonitor} />
+
           <section id="case-assignments" style={sectionStyle}>
-            <SectionTitle title="标注样本分配" />
+            <SectionTitle title="病例级任务分配" />
             <div style={{ color: 'var(--text-secondary)', marginBottom: 12 }}>
-              先选择数据中心，再按库内序号或登记号解析病例，确认预览后分配。每个数据集独立编号，不同中心的“病例001”不会互相混用。
+              这里分配的是具体病例任务，不会新建数据集，也不会自动包含未来新增病例。先选择数据中心，再按库内序号或登记号解析病例。
             </div>
 
             <div style={assignmentPanelStyle}>

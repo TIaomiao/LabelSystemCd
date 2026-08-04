@@ -26,6 +26,7 @@ from extensions import db
 from models import (
     CaseAssignment,
     CviCaseCatalog,
+    DatasetAccessGrant,
     EvaluationResult,
     FunctionalAssessment,
     ImageAnalysis,
@@ -64,10 +65,15 @@ def _int_env(name: str, default: int) -> int:
 CVI_MEDIA_CACHE_MAX_ITEMS = _int_env("LABELSYSTEM_CVI_IMAGE_CACHE_ITEMS", 800)
 CVI_MEDIA_CACHE_MAX_BYTES = _int_env("LABELSYSTEM_CVI_IMAGE_CACHE_BYTES", 512 * 1024 * 1024)
 CVI_MEDIA_BROWSER_MAX_AGE = _int_env("LABELSYSTEM_CVI_IMAGE_BROWSER_MAX_AGE", 300)
+CVI_SERIES_STUDY_CACHE_MAX_ITEMS = _int_env("LABELSYSTEM_CVI_SERIES_STUDY_CACHE_ITEMS", 4096)
+CVI_SERIES_STUDY_CACHE_TTL_SECONDS = _int_env("LABELSYSTEM_CVI_SERIES_STUDY_CACHE_TTL", 300)
 CVI_MEDIA_CACHE_LOCK = Lock()
 CVI_MEDIA_CACHE_BYTES = 0
 CVI_MEDIA_RESPONSE_CACHE: OrderedDict[str, tuple[int, dict[str, str], bytes]] = OrderedDict()
+CVI_SERIES_STUDY_CACHE_LOCK = Lock()
+CVI_SERIES_STUDY_CACHE: OrderedDict[int, tuple[int, float]] = OrderedDict()
 CASE_MANIFEST_CACHE: dict[str, tuple[int, dict]] = {}
+CASE_CATALOG_REFRESH_LOCK = Lock()
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -314,10 +320,20 @@ def _user_can_access_case(namespace: str, dataset: str, case_id: str) -> bool:
     if getattr(current_user, "is_admin", False):
         return True
     dataset = dataset or ""
+    if _current_user_has_dataset_grant(namespace, dataset):
+        return True
+    raw_case_id = str(case_id or "").strip()
+    if _dataset_is_private_by_assignment(namespace, dataset):
+        return CaseAssignment.query.filter_by(
+            namespace=namespace,
+            dataset=dataset,
+            case_id=raw_case_id,
+            user_id=current_user.id,
+            active=True,
+        ).first() is not None
     normalized_case_id = _normalized_case_id(case_id)
     if namespace == "functional" and dataset == "CMR_ALL":
         return True
-    raw_case_id = str(case_id or "").strip()
     return CaseAssignment.query.filter_by(
         namespace=namespace,
         dataset=dataset,
@@ -386,6 +402,10 @@ def _media_cache_put(key: str, status: int, headers: dict[str, str], body: bytes
 
 
 def _proxy_cvi_api(path: str) -> Response:
+    authorization_error = _authorize_cvi_proxy_request(path)
+    if authorization_error is not None:
+        return authorization_error
+
     is_media = _is_cvi_media_request(path)
     if is_media:
         if not _browser_viewer_request():
@@ -493,6 +513,260 @@ def _json_request(path: str, method: str = "GET", payload: dict | None = None) -
     except urllib.error.URLError as exc:
         current_app.logger.exception("CVI API request failed: %s", exc)
         return 502, {"detail": "CVI 工作站 API 尚未启动或不可访问。"}
+
+
+def _cvi_proxy_json_error(status: int, detail: str) -> Response:
+    return Response(
+        json.dumps({"detail": detail}, ensure_ascii=False),
+        status=status,
+        content_type="application/json; charset=utf-8",
+    )
+
+
+def _config_flag_enabled(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _dataset_is_private_by_assignment(namespace: str, dataset: str) -> bool:
+    if str(namespace or "").strip().lower() != "functional":
+        return False
+    target = _base_dicom_dataset_name(_canonical_dataset(dataset))
+    if not target:
+        return False
+    for item in current_app.config.get("CVI_LIBRARY_MULTICENTER_ROOTS", []):
+        configured_dataset = _base_dicom_dataset_name(_canonical_dataset(item.get("dataset")))
+        if configured_dataset == target and _config_flag_enabled(item.get("private_by_assignment")):
+            return True
+    return False
+
+
+def _dataset_is_configured_for_access(namespace: str, dataset: str) -> bool:
+    if str(namespace or '').strip().lower() != 'functional':
+        return False
+    target = str(dataset or '').strip()
+    if not target:
+        return False
+    return any(
+        str(item.get('dataset') or '').strip() == target
+        for item in current_app.config.get('CVI_LIBRARY_MULTICENTER_ROOTS', [])
+        if isinstance(item, dict)
+    )
+
+
+def _current_user_has_dataset_grant(namespace: str, dataset: str) -> bool:
+    if (
+        not current_user.is_authenticated
+        or str(dataset or '').strip() == 'CMR_ALL'
+        or not _dataset_is_configured_for_access(namespace, dataset)
+    ):
+        return False
+    return DatasetAccessGrant.query.filter_by(
+        namespace=str(namespace or '').strip(),
+        dataset=str(dataset or '').strip(),
+        user_id=current_user.id,
+        active=True,
+    ).first() is not None
+
+
+def _current_user_has_catalog_assignment(case: CviCaseCatalog) -> bool:
+    if _current_user_has_dataset_grant(case.source, case.dataset):
+        return True
+    raw_case_id = str(case.case_id or "").strip()
+    return CaseAssignment.query.filter_by(
+        namespace=case.source,
+        dataset=case.dataset or "",
+        case_id=raw_case_id,
+        user_id=current_user.id,
+        active=True,
+    ).first() is not None
+
+
+def _configured_private_dataset_roots() -> list[str]:
+    roots = []
+    for item in current_app.config.get("CVI_LIBRARY_MULTICENTER_ROOTS", []):
+        if not _config_flag_enabled(item.get("private_by_assignment")):
+            continue
+        raw_path = str(item.get("path") or "").strip()
+        if raw_path:
+            roots.append(raw_path)
+    return roots
+
+
+def _authorize_unmapped_cvi_study(study_id: int) -> Response | None:
+    private_roots = _configured_private_dataset_roots()
+    if not private_roots:
+        return None
+    status, payload = _json_request(
+        f"/internal/studies/{study_id}/source-membership",
+        method="POST",
+        payload={"roots": private_roots},
+    )
+    if status != 200:
+        response_status = status if 400 <= status <= 599 else 502
+        detail = "Study not found." if status == 404 else "无法核验该病例的访问权限。"
+        return _cvi_proxy_json_error(response_status, detail)
+    matches_private_root = payload.get("matches") if isinstance(payload, dict) else None
+    if not isinstance(matches_private_root, bool):
+        return _cvi_proxy_json_error(502, "无法核验该病例的访问权限。")
+    if matches_private_root:
+        # Private upstream data must have a live catalogue identity before an
+        # assignment can authorize it. This also closes stale-row/direct-import gaps.
+        return _cvi_proxy_json_error(403, "这个病例尚未通过病例库分配给当前账号。")
+    return None
+
+
+def _authorize_cvi_study(study_id: int) -> Response | None:
+    catalog_cases = CviCaseCatalog.query.filter_by(cvi_study_id=study_id).all()
+    private_cases = [
+        case
+        for case in catalog_cases
+        if _dataset_is_private_by_assignment(case.source, case.dataset)
+    ]
+    if not private_cases:
+        if catalog_cases:
+            return None
+        return _authorize_unmapped_cvi_study(study_id)
+    if any(_current_user_has_catalog_assignment(case) for case in private_cases):
+        return None
+    return _cvi_proxy_json_error(403, "这个病例尚未分配给当前账号。")
+
+
+def _cached_series_study_id(series_id: int) -> int | None:
+    now = time.monotonic()
+    with CVI_SERIES_STUDY_CACHE_LOCK:
+        cached = CVI_SERIES_STUDY_CACHE.get(series_id)
+        if cached is None:
+            return None
+        study_id, cached_at = cached
+        if CVI_SERIES_STUDY_CACHE_TTL_SECONDS > 0 and now - cached_at <= CVI_SERIES_STUDY_CACHE_TTL_SECONDS:
+            CVI_SERIES_STUDY_CACHE.move_to_end(series_id)
+            return study_id
+        CVI_SERIES_STUDY_CACHE.pop(series_id, None)
+    return None
+
+
+def _remember_series_study_id(series_id: int, study_id: int) -> None:
+    if CVI_SERIES_STUDY_CACHE_MAX_ITEMS <= 0 or CVI_SERIES_STUDY_CACHE_TTL_SECONDS <= 0:
+        return
+    with CVI_SERIES_STUDY_CACHE_LOCK:
+        CVI_SERIES_STUDY_CACHE[series_id] = (study_id, time.monotonic())
+        CVI_SERIES_STUDY_CACHE.move_to_end(series_id)
+        while len(CVI_SERIES_STUDY_CACHE) > CVI_SERIES_STUDY_CACHE_MAX_ITEMS:
+            CVI_SERIES_STUDY_CACHE.popitem(last=False)
+
+
+def _resolve_series_study_id(series_id: int) -> tuple[int | None, Response | None]:
+    cached_study_id = _cached_series_study_id(series_id)
+    if cached_study_id is not None:
+        return cached_study_id, None
+
+    status, payload = _json_request(f"/series/{series_id}")
+    if status != 200:
+        response_status = status if 400 <= status <= 599 else 502
+        detail = "Series not found." if status == 404 else "无法核验该序列的病例访问权限。"
+        return None, _cvi_proxy_json_error(response_status, detail)
+    try:
+        study_id = int(payload["study_id"])
+    except (KeyError, TypeError, ValueError):
+        return None, _cvi_proxy_json_error(502, "无法核验该序列的病例访问权限。")
+    _remember_series_study_id(series_id, study_id)
+    return study_id, None
+
+
+def _resolve_job_study_id(job_id: int) -> tuple[int | None, Response | None]:
+    status, payload = _json_request(f"/internal/jobs/{job_id}/scope")
+    if status != 200:
+        response_status = status if 400 <= status <= 599 else 502
+        detail = "Job not found." if status == 404 else "无法核验该任务的病例访问权限。"
+        return None, _cvi_proxy_json_error(response_status, detail)
+    try:
+        study_id = int(payload["study_id"])
+    except (KeyError, TypeError, ValueError):
+        return None, _cvi_proxy_json_error(502, "无法核验该任务的病例访问权限。")
+    if study_id <= 0:
+        return None, _cvi_proxy_json_error(502, "无法核验该任务的病例访问权限。")
+    return study_id, None
+
+
+def _positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _cvi_request_references(path: str) -> tuple[set[int], set[int]]:
+    normalized_path = urllib.parse.unquote(path or "").strip("/")
+    study_ids: set[int] = set()
+    series_ids: set[int] = set()
+
+    study_match = re.fullmatch(r"(?:studies|reports)/(\d+)", normalized_path)
+    if study_match:
+        study_ids.add(int(study_match.group(1)))
+    export_match = re.fullmatch(r"exports/(\d+)\.(?:csv|pdf)", normalized_path)
+    if export_match:
+        study_ids.add(int(export_match.group(1)))
+    series_match = re.match(r"^(?:series|contours)/(\d+)(?:/|$)", normalized_path)
+    if series_match:
+        series_ids.add(int(series_match.group(1)))
+
+    if normalized_path == "studies/annotation-summaries":
+        for raw_values in request.args.getlist("study_ids"):
+            for value in raw_values.split(","):
+                parsed = _positive_int(value.strip())
+                if parsed is not None:
+                    study_ids.add(parsed)
+
+    if request.is_json:
+        payload = request.get_json(silent=True)
+        if isinstance(payload, dict):
+            parsed = _positive_int(payload.get("study_id"))
+            if parsed is not None:
+                study_ids.add(parsed)
+            parsed = _positive_int(payload.get("series_id"))
+            if parsed is not None:
+                series_ids.add(parsed)
+
+    return study_ids, series_ids
+
+
+def _authorize_cvi_proxy_request(path: str) -> Response | None:
+    if not current_user.is_authenticated:
+        return _cvi_proxy_json_error(403, "当前账号没有访问权限。")
+
+    normalized_path = urllib.parse.unquote(path or "").strip("/")
+    if normalized_path.startswith("internal/"):
+        return _cvi_proxy_json_error(404, "Not found.")
+    if getattr(current_user, "is_admin", False):
+        return None
+    if normalized_path in {"fs/list", "studies/import"}:
+        return _cvi_proxy_json_error(403, "请从已分配病例库进入工作站。")
+
+    study_ids, series_ids = _cvi_request_references(normalized_path)
+    job_match = re.fullmatch(r"jobs/(\d+)(?:/pause)?", normalized_path)
+    if job_match:
+        study_id, resolution_error = _resolve_job_study_id(int(job_match.group(1)))
+        if resolution_error is not None:
+            return resolution_error
+        if study_id is not None:
+            study_ids.add(study_id)
+    for series_id in sorted(series_ids):
+        study_id, resolution_error = _resolve_series_study_id(series_id)
+        if resolution_error is not None:
+            return resolution_error
+        if study_id is not None:
+            study_ids.add(study_id)
+
+    for study_id in sorted(study_ids):
+        authorization_error = _authorize_cvi_study(study_id)
+        if authorization_error is not None:
+            return authorization_error
+    return None
 
 
 def _is_hidden(path: Path) -> bool:
@@ -679,6 +953,7 @@ def _source_roots() -> list[dict]:
                 "case_dir_depth": item.get("case_dir_depth"),
                 "case_id_manifest": item.get("case_id_manifest"),
                 "case_id_prefix": item.get("case_id_prefix"),
+                "private_by_assignment": _config_flag_enabled(item.get("private_by_assignment")),
             }
         )
 
@@ -760,7 +1035,6 @@ def _eval_report_case_ids(base_dataset: str, limit: int | None = None) -> list[s
 
 def _cvi_library_options() -> list[dict]:
     is_admin = bool(getattr(current_user, "is_admin", False)) if current_user.is_authenticated else False
-    username = str(getattr(current_user, "username", "") or "").strip()
     options = []
 
     if is_admin:
@@ -778,10 +1052,12 @@ def _cvi_library_options() -> list[dict]:
             options.append(
                 {
                     "value": "annotation",
-                    "label": f"原标注目录-{username}专属",
+                    "label": f"原标注目录 · 已分配病例（{len(annotation_case_ids)}例）",
                     "root": str(Path(current_app.config["DATA_ROOT"]).expanduser()),
                     "source": "annotation",
                     "case_ids": annotation_case_ids,
+                    "kind": "assignment_view",
+                    "access_scope": "case_assignments",
                 }
             )
 
@@ -792,6 +1068,7 @@ def _cvi_library_options() -> list[dict]:
         label = str(item.get("label") or dataset_name).strip()
         root_path = Path(item["path"]).expanduser()
         user_case_ids = _assigned_case_ids_for_current_user("functional", dataset_name) if not is_admin else []
+        has_dataset_grant = _current_user_has_dataset_grant("functional", dataset_name) if not is_admin else False
 
         if dataset_name == "CMR_ALL":
             report100_case_ids = _eval_report_case_ids("CMR_ALL")
@@ -804,6 +1081,8 @@ def _cvi_library_options() -> list[dict]:
                     "source": "functional",
                     "dataset_filters": ["CMR_ALL"],
                     "case_ids": report100_case_ids,
+                    "kind": "subset",
+                    "access_scope": "system_shared",
                 },
             )
             options.insert(
@@ -814,28 +1093,46 @@ def _cvi_library_options() -> list[dict]:
                     "root": str(root_path),
                     "source": "functional",
                     "dataset_filters": ["CMR_ALL"],
+                    "kind": "dataset",
+                    "access_scope": "system_shared",
                 },
             )
             if not is_admin and user_case_ids:
                 options.append(
                     {
                         "value": "functional::CMR_ALL::assigned",
-                        "label": f"昆医附二院标注任务-{username}专属",
+                        "label": f"昆医附二院 · 已分配病例（{len(user_case_ids)}例）",
                         "root": str(root_path),
                         "source": "functional",
                         "dataset_filters": ["CMR_ALL"],
                         "case_ids": user_case_ids,
+                        "kind": "assignment_view",
+                        "access_scope": "case_assignments",
                     }
                 )
+        elif not is_admin and has_dataset_grant:
+            options.append(
+                {
+                    "value": f"functional::{dataset_name}::granted",
+                    "label": f"{label} · 整库权限",
+                    "root": str(root_path),
+                    "source": "functional",
+                    "dataset_filters": [dataset_name],
+                    "kind": "dataset_access",
+                    "access_scope": "dataset_grant",
+                }
+            )
         elif not is_admin and user_case_ids:
             options.append(
                 {
                     "value": f"functional::{dataset_name}::assigned",
-                    "label": f"{label}-{username}专属",
+                    "label": f"{label} · 已分配病例（{len(user_case_ids)}例）",
                     "root": str(root_path),
                     "source": "functional",
                     "dataset_filters": [dataset_name],
                     "case_ids": user_case_ids,
+                    "kind": "assignment_view",
+                    "access_scope": "case_assignments",
                 }
             )
 
@@ -847,6 +1144,8 @@ def _cvi_library_options() -> list[dict]:
                     "root": str(root_path),
                     "source": "functional",
                     "dataset_filters": [dataset_name],
+                    "kind": "dataset",
+                    "access_scope": "admin",
                 }
             )
     return options
@@ -1087,43 +1386,67 @@ def _iter_case_dirs(source_filter: str = "all", dataset_filters: list[str] | Non
 
 def _refresh_case_catalog(source_filter: str = "all", dataset_filters: list[str] | None = None) -> int:
     now = datetime.utcnow()
-    updated = 0
     seen_keys: set[tuple[str, str, str]] = set()
     affected_sources = {
         item["source"]
         for item in _source_roots()
         if source_filter == "all" or item["source"] == source_filter
     }
+    scanned_cases = []
     for source, dataset, case_id, case_path in _iter_case_dirs(source_filter, dataset_filters):
         scan_path = _resolve_dicom_case_path(dataset, case_id, case_path)
         seen_keys.add((source, dataset, case_id))
         sequences, dicom_count, has_dicom = _sequence_summary(scan_path)
-        full_id = f"{dataset}/{case_id}"
-        existing = CviCaseCatalog.query.filter_by(source=source, dataset=dataset, case_id=case_id).first()
+        scanned_cases.append({
+            "source": source,
+            "dataset": dataset,
+            "case_id": case_id,
+            "path": str(scan_path),
+            "sequence_summary": sequences,
+            "dicom_count": dicom_count,
+            "has_dicom": has_dicom,
+        })
+
+    existing_query = CviCaseCatalog.query
+    if affected_sources:
+        existing_query = existing_query.filter(CviCaseCatalog.source.in_(sorted(affected_sources)))
+    if dataset_filters:
+        existing_query = existing_query.filter(CviCaseCatalog.dataset.in_(dataset_filters))
+    existing_cases = existing_query.all() if affected_sources else []
+    existing_by_key = {
+        (item.source, item.dataset, item.case_id): item
+        for item in existing_cases
+    }
+
+    for scanned in scanned_cases:
+        key = (scanned["source"], scanned["dataset"], scanned["case_id"])
+        existing = existing_by_key.get(key)
         if existing is None:
-            existing = CviCaseCatalog(source=source, dataset=dataset, case_id=case_id, full_id=full_id)
+            existing = CviCaseCatalog(
+                source=scanned["source"],
+                dataset=scanned["dataset"],
+                case_id=scanned["case_id"],
+                full_id=f'{scanned["dataset"]}/{scanned["case_id"]}',
+            )
             db.session.add(existing)
-        existing.path = str(scan_path)
-        existing.sequence_summary = sequences
-        existing.dicom_count = dicom_count
-        existing.has_dicom = has_dicom
+        existing.path = scanned["path"]
+        existing.sequence_summary = scanned["sequence_summary"]
+        existing.dicom_count = scanned["dicom_count"]
+        existing.has_dicom = scanned["has_dicom"]
         existing.last_seen_at = now
         existing.updated_at = now
-        updated += 1
 
-    if affected_sources:
-        stale_query = CviCaseCatalog.query.filter(CviCaseCatalog.source.in_(sorted(affected_sources)))
-        if dataset_filters:
-            stale_query = stale_query.filter(CviCaseCatalog.dataset.in_(dataset_filters))
-        stale_cases = stale_query.all()
-        for stale_case in stale_cases:
-            key = (stale_case.source, stale_case.dataset, stale_case.case_id)
-            if key in seen_keys:
-                continue
+    for stale_case in existing_cases:
+        key = (stale_case.source, stale_case.dataset, stale_case.case_id)
+        if key not in seen_keys:
             db.session.delete(stale_case)
 
-    db.session.commit()
-    return updated
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return len(scanned_cases)
 
 
 def _catalog_query(
@@ -1242,7 +1565,10 @@ def _catalog_payload(selection: dict, search: str, limit: int, refreshed: int = 
             case_ids=case_ids,
         ).count(),
         "refreshed": refreshed,
-        "sources": _cvi_library_options(),
+        "sources": [
+            {key: value for key, value in item.items() if key != "root"}
+            for item in _cvi_library_options()
+        ],
     }
 
 
@@ -1379,10 +1705,21 @@ def register_cvi_workstation_routes(app) -> None:
             existing_query = existing_query.filter(CviCaseCatalog.dataset.in_(selection["dataset_filters"]))
         existing_count = existing_query.count()
         refreshed = 0
+        refresh_in_progress = False
         if refresh or existing_count == 0:
-            refreshed = _refresh_case_catalog(selection["scan_source"], selection["dataset_filters"])
+            # Release the login/catalog read transaction before a potentially
+            # long filesystem scan. SQLite catalogue writes remain single-flight.
+            db.session.rollback()
+            if CASE_CATALOG_REFRESH_LOCK.acquire(blocking=False):
+                try:
+                    refreshed = _refresh_case_catalog(selection["scan_source"], selection["dataset_filters"])
+                finally:
+                    CASE_CATALOG_REFRESH_LOCK.release()
+            else:
+                refresh_in_progress = True
         payload = _catalog_payload(selection, search, limit, refreshed)
         payload["source"] = source
+        payload["refresh_in_progress"] = refresh_in_progress
         review_user_id = _review_target_user_id()
         snapshot = _annotation_snapshot(review_user_id, payload["items"])
         cvi_snapshot = _cvi_annotation_snapshot(payload["items"])

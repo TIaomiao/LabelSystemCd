@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE_DIR = PROJECT_ROOT / ".cvi-workspace"
+WORKSPACE_DIR = Path(os.environ.get("CVI_WORKSPACE_DIR", str(PROJECT_ROOT / ".cvi-workspace"))).expanduser()
 DB_PATH = WORKSPACE_DIR / "cvi.db"
 RENDER_DIR = WORKSPACE_DIR / "renders"
 EXPORT_DIR = WORKSPACE_DIR / "exports"

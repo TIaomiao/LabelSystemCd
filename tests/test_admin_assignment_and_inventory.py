@@ -13,6 +13,7 @@ from backend.hospital_browser.routes import (
 from backend.routes import (
     _assignment_dataset_library_presets,
     _parse_assignment_ordered_case_selection,
+    _resolve_assessment_case_path,
     _resolve_assignment_identifier_selection,
 )
 from extensions import db
@@ -152,6 +153,42 @@ class HospitalInventoryCountTest(unittest.TestCase):
             self.assertEqual(item['catalog_count'], 2)
             self.assertEqual(item['imported_count'], 1)
             self.assertEqual(item['classification_status'], 'pending')
+
+
+class AssessmentCasePathTest(unittest.TestCase):
+    def test_catalog_case_path_is_resolved_only_inside_configured_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'cases'
+            case_dir = root / 'case-a'
+            case_dir.mkdir(parents=True)
+            outside = Path(tmp) / 'outside-case'
+            outside.mkdir()
+
+            app = Flask(__name__)
+            app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
+            app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+            app.config['FUNCTIONAL_DATA_ROOT'] = str(Path(tmp) / 'legacy')
+            app.config['DATA_ROOT'] = str(Path(tmp) / 'annotation')
+            app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
+                {'dataset': 'CENTER_A', 'label': '中心 A', 'path': str(root)},
+            ]
+            db.init_app(app)
+            with app.app_context():
+                db.create_all()
+                valid = CviCaseCatalog(
+                    source='functional', dataset='CENTER_A', case_id='case-a',
+                    full_id='functional/CENTER_A/case-a', path=str(case_dir), has_dicom=True,
+                )
+                invalid = CviCaseCatalog(
+                    source='functional', dataset='CENTER_A', case_id='case-outside',
+                    full_id='functional/CENTER_A/case-outside', path=str(outside), has_dicom=True,
+                )
+                db.session.add_all([valid, invalid])
+                db.session.commit()
+
+                self.assertEqual(_resolve_assessment_case_path('CENTER_A', 'case-a'), case_dir.resolve())
+                self.assertIsNone(_resolve_assessment_case_path('CENTER_A', 'case-outside'))
+                self.assertNotIn('path', valid.to_dict())
 
 
 if __name__ == '__main__':

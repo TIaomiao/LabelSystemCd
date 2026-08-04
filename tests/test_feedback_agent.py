@@ -1,10 +1,36 @@
 import json
 import unittest
 
-from backend.feedback_agent import normalize_agent_result, redact_external_text, safe_page_context
+from backend.feedback_agent import (
+    build_messages,
+    normalize_agent_result,
+    redact_external_text,
+    resolve_feedback_model,
+    safe_page_context,
+)
 
 
 class FeedbackAgentTest(unittest.TestCase):
+    def test_high_reasoning_uses_56_sol_model_and_standard_keeps_gateway_model(self):
+        self.assertEqual(resolve_feedback_model('[j]gpt-5.4', 'high'), '[j]gpt-5.6-sol')
+        self.assertEqual(resolve_feedback_model('[j]gpt-5.4', 'medium'), '[j]gpt-5.4')
+        self.assertEqual(
+            resolve_feedback_model('[j]gpt-5.4', 'high', high_model='gateway-high-model'),
+            'gateway-high-model',
+        )
+
+    def test_build_messages_requires_readable_markdown_structure(self):
+        messages = build_messages(
+            [{'role': 'user', 'content': '怎么完成 LGE 勾画？'}],
+            page_context={'module': 'cvi', 'module_label': 'CMR 工作站'},
+            category_hint='usage_help',
+        )
+
+        instruction = messages[1]['content']
+        self.assertIn('Markdown 分段', instruction)
+        self.assertIn('编号步骤', instruction)
+        self.assertIn('结果检查方法', instruction)
+
     def test_redact_external_text_hides_common_identifiers_but_keeps_measurements(self):
         source = '登记号 0002343629，手机 13812345678，LVEF 62%，ED 6，ES 16。'
 

@@ -1,0 +1,314 @@
+:root {
+  --cvi-curvature-accent: #22d3ee;
+  --cvi-curvature-border: rgba(148, 163, 184, 0.28);
+  --cvi-curvature-panel: rgba(8, 15, 28, 0.97);
+  --cvi-curvature-muted: #94a3b8;
+}
+
+.cvi-curvature-launch {
+  border-color: rgba(34, 211, 238, 0.48) !important;
+  color: #a5f3fc !important;
+}
+
+.cvi-curvature-launch.is-active {
+  background: rgba(8, 145, 178, 0.28) !important;
+  border-color: #22d3ee !important;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25) inset;
+}
+
+.cvi-curvature-panel {
+  position: fixed;
+  z-index: 2147482000;
+  top: 72px;
+  right: 22px;
+  width: min(370px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  color: #e2e8f0;
+  background: var(--cvi-curvature-panel);
+  border: 1px solid rgba(34, 211, 238, 0.38);
+  border-radius: 14px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.52);
+  font: 13px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  backdrop-filter: blur(14px);
+}
+
+.cvi-curvature-panel[hidden] {
+  display: none !important;
+}
+
+.cvi-curvature-head {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 15px 12px;
+  background: rgba(8, 15, 28, 0.98);
+  border-bottom: 1px solid var(--cvi-curvature-border);
+  border-radius: 14px 14px 0 0;
+}
+
+.cvi-curvature-head strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 15px;
+}
+
+.cvi-curvature-head small,
+.cvi-curvature-copy,
+.cvi-curvature-status,
+.cvi-curvature-frame-note {
+  color: var(--cvi-curvature-muted);
+}
+
+.cvi-curvature-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid var(--cvi-curvature-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.cvi-curvature-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px 15px 16px;
+}
+
+.cvi-curvature-section {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid var(--cvi-curvature-border);
+  border-radius: 10px;
+}
+
+.cvi-curvature-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #f1f5f9;
+  font-weight: 650;
+}
+
+.cvi-curvature-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  padding: 1px 7px;
+  color: #bae6fd;
+  background: rgba(14, 116, 144, 0.28);
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cvi-curvature-badge.is-warning {
+  color: #fde68a;
+  background: rgba(180, 83, 9, 0.2);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.cvi-curvature-badge.is-error {
+  color: #fecaca;
+  background: rgba(185, 28, 28, 0.22);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.cvi-curvature-point-grid,
+.cvi-curvature-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.cvi-curvature-point,
+.cvi-curvature-action {
+  min-height: 34px;
+  padding: 7px 9px;
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cvi-curvature-point:hover,
+.cvi-curvature-action:hover {
+  border-color: rgba(34, 211, 238, 0.62);
+}
+
+.cvi-curvature-point.is-active {
+  color: #ecfeff;
+  background: rgba(8, 145, 178, 0.3);
+  border-color: #22d3ee;
+}
+
+.cvi-curvature-point.is-set::after {
+  content: " ✓";
+  color: #4ade80;
+}
+
+.cvi-curvature-action {
+  text-align: center;
+}
+
+.cvi-curvature-action.primary {
+  color: #06202a;
+  background: #67e8f9;
+  border-color: #a5f3fc;
+  font-weight: 700;
+}
+
+.cvi-curvature-action.danger {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.38);
+}
+
+.cvi-curvature-action:disabled,
+.cvi-curvature-point:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cvi-curvature-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.cvi-curvature-metric {
+  min-width: 0;
+  padding: 8px;
+  background: rgba(2, 6, 23, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+}
+
+.cvi-curvature-metric span {
+  display: block;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cvi-curvature-metric strong {
+  display: block;
+  margin-top: 2px;
+  color: #f8fafc;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cvi-curvature-metric.is-rc {
+  grid-column: 1 / -1;
+  border-color: rgba(34, 211, 238, 0.38);
+}
+
+.cvi-curvature-metric.is-rc strong {
+  color: #67e8f9;
+  font-size: 21px;
+}
+
+.cvi-curvature-reasons {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #fde68a;
+}
+
+.cvi-curvature-status {
+  min-height: 18px;
+  margin: 0;
+}
+
+.cvi-curvature-status.is-error {
+  color: #fca5a5;
+}
+
+.cvi-curvature-status.is-success {
+  color: #86efac;
+}
+
+.cvi-curvature-layer {
+  pointer-events: none;
+}
+
+.cvi-curvature-chord,
+.cvi-curvature-arm,
+.cvi-curvature-circle {
+  vector-effect: non-scaling-stroke;
+}
+
+.cvi-curvature-chord {
+  stroke: #fbbf24;
+  stroke-width: 1.7;
+  stroke-dasharray: 5 4;
+  opacity: 0.9;
+}
+
+.cvi-curvature-arm {
+  fill: none;
+  stroke: rgba(226, 232, 240, 0.6);
+  stroke-width: 1.25;
+}
+
+.cvi-curvature-circle {
+  fill: none;
+  stroke-width: 1.35;
+  stroke-dasharray: 4 3;
+  opacity: 0.72;
+}
+
+.cvi-curvature-circle.ivs { stroke: #22d3ee; }
+.cvi-curvature-circle.fw { stroke: #f472b6; }
+
+.cvi-curvature-handle {
+  vector-effect: non-scaling-stroke;
+  stroke: #020617;
+  stroke-width: 1.6;
+}
+
+.cvi-curvature-handle.junction { fill: #fbbf24; }
+.cvi-curvature-handle.ivs { fill: #22d3ee; }
+.cvi-curvature-handle.fw { fill: #f472b6; }
+
+.cvi-curvature-label,
+.cvi-curvature-image-label {
+  fill: #f8fafc;
+  stroke: rgba(2, 6, 23, 0.92);
+  stroke-width: 3px;
+  paint-order: stroke;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.cvi-curvature-label { font-size: 10px; }
+.cvi-curvature-image-label { font-size: 12px; }
+
+html.cvi-curvature-active .viewer-grid > .viewer-card:first-child .viewer-overlay {
+  cursor: crosshair !important;
+  touch-action: none;
+}
+
+@media (max-width: 900px) {
+  .cvi-curvature-panel {
+    top: 58px;
+    right: 8px;
+    max-height: calc(100vh - 70px);
+  }
+}

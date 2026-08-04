@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+import hashlib
 from pathlib import Path
 from typing import Any
 import re
@@ -55,7 +56,7 @@ def _directory_has_dicom(root: Path) -> bool:
 
 
 def _selection_range_from_sequence_name(name: str) -> tuple[int, int] | None:
-    match = re.match(r"^(?:4CH|SAX|LGE)=(\d+)-(\d+)$", name.strip(), flags=re.IGNORECASE)
+    match = re.match(r"^(?:2CH|3CH|4CH|SAX|LGE)=(\d+)-(\d+)$", name.strip(), flags=re.IGNORECASE)
     if not match:
         return None
     start = int(match.group(1))
@@ -192,6 +193,32 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_image_storage_dataset(ds: pydicom.dataset.FileDataset) -> bool:
+    sop_class_uid = _safe_text(getattr(ds, "SOPClassUID", ""))
+    if not sop_class_uid:
+        file_meta = getattr(ds, "file_meta", None)
+        sop_class_uid = _safe_text(getattr(file_meta, "MediaStorageSOPClassUID", ""))
+    if not sop_class_uid:
+        return False
+
+    try:
+        uid = pydicom.uid.UID(sop_class_uid)
+    except (TypeError, ValueError):
+        return False
+
+    # Newer pydicom versions expose the DICOM registry classification
+    # directly.  pydicom 2.x (used by this deployment) does not, so fall back
+    # to the registry's standard SOP Class name.  This accepts MR/Enhanced MR,
+    # secondary capture and other genuine Image Storage classes, while
+    # rejecting Raw Data Storage, SR, presentation states and segmentations.
+    is_image_storage = getattr(uid, "is_image_storage", None)
+    if is_image_storage is not None:
+        if callable(is_image_storage):
+            is_image_storage = is_image_storage()
+        return bool(is_image_storage)
+    return "Image Storage" in uid.name
+
+
 def _normalize_patient_age(raw_age: Any, birth_date: str, study_date: str) -> str:
     text = _safe_text(raw_age).upper()
     if text:
@@ -211,27 +238,42 @@ def _normalize_patient_age(raw_age: Any, birth_date: str, study_date: str) -> st
 
 def _pixel_spacing(ds: pydicom.dataset.FileDataset) -> tuple[float, float]:
     spacing = getattr(ds, "PixelSpacing", None) or [1.0, 1.0]
-    if len(spacing) < 2:
+    try:
+        if len(spacing) < 2:
+            return 1.0, 1.0
+    except TypeError:
         return 1.0, 1.0
     return _safe_float(spacing[1], 1.0), _safe_float(spacing[0], 1.0)
 
 
 def _image_position(ds: pydicom.dataset.FileDataset) -> list[float]:
     value = getattr(ds, "ImagePositionPatient", None) or [0.0, 0.0, 0.0]
-    return [_safe_float(item) for item in value[:3]]
+    try:
+        if len(value) < 3:
+            return [0.0, 0.0, 0.0]
+        return [_safe_float(item) for item in value[:3]]
+    except TypeError:
+        return [0.0, 0.0, 0.0]
 
 
 def _image_orientation(ds: pydicom.dataset.FileDataset) -> list[float]:
     value = getattr(ds, "ImageOrientationPatient", None) or [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
-    if len(value) < 6:
+    try:
+        if len(value) < 6:
+            return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        return [_safe_float(item) for item in value[:6]]
+    except TypeError:
         return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
-    return [_safe_float(item) for item in value[:6]]
 
 
 def orientation_label(description: str, role: str) -> str:
     text = description.lower()
     if role == "lge_lax":
         return "LGE-LAX"
+    if role == "cine_lax_2ch" or "2ch" in text:
+        return "LAX-2CH"
+    if role == "cine_lax_3ch" or "3ch" in text:
+        return "LAX-3CH"
     if role == "cine_lax_4ch" or "4ch" in text:
         return "LAX-4CH"
     if role == "lge_sax":
@@ -242,11 +284,23 @@ def orientation_label(description: str, role: str) -> str:
 
 
 LGE_MARKERS = ("psir", "lge", "late enhancement", "delayed enhancement", "delay", "scar")
+TWO_CH_MARKERS = ("2ch", "2-ch", "2 chamber", "two chamber", "c2ch", "lax_2", "lax 2")
+THREE_CH_MARKERS = ("3ch", "3-ch", "3 chamber", "three chamber", "c3ch", "lax_3", "lax 3")
 FOUR_CH_MARKERS = ("4ch", "4-ch", "4 chamber", "four chamber", "c4ch", "lax_4", "lax 4")
-SAX_MARKERS = ("sax", "short axis", "csax", "sbtfe_bh_m2d", "sa stack")
+SAX_STACK_MARKERS = ("8sl", "10sl", "12sl")
+SAX_MARKERS = ("sax", "short axis", "csax", "sbtfe_bh_m2d", "sa stack", *SAX_STACK_MARKERS)
+CINE_MARKERS = ("cine", "retro", "btfe", "b-tfe", "sbtfe", "trufi", "truefisp", "segmented")
 NON_FUNCTION_CINE_MARKERS = (
     "survey",
+    "define",
+    "localizer",
+    "locator",
+    "scout",
     "interactive",
+    "dynamic",
+    "perfusion",
+    "first pass",
+    "first_pass",
     "perf",
     "dyn_stfe",
     "dyn stfe",
@@ -291,10 +345,12 @@ def infer_role(
         philips_slice_orientation,
     )
     has_lge_marker = _has_any_token(token, LGE_MARKERS)
+    has_2ch_marker = _has_any_token(token, TWO_CH_MARKERS)
+    has_3ch_marker = _has_any_token(token, THREE_CH_MARKERS)
     has_4ch_marker = _has_any_token(token, FOUR_CH_MARKERS)
     has_sax_marker = _has_any_token(token, SAX_MARKERS)
     if has_lge_marker:
-        if has_4ch_marker:
+        if has_2ch_marker or has_3ch_marker or has_4ch_marker:
             return "lge_lax"
         if has_sax_marker or unique_positions > 1:
             return "lge_sax"
@@ -303,6 +359,10 @@ def infer_role(
     if _has_any_token(token, NON_FUNCTION_CINE_MARKERS):
         return "unknown"
 
+    if has_2ch_marker and unique_phases > 1:
+        return "cine_lax_2ch"
+    if has_3ch_marker and unique_phases > 1:
+        return "cine_lax_3ch"
     if has_4ch_marker and unique_phases > 1:
         return "cine_lax_4ch"
 
@@ -319,7 +379,12 @@ def infer_role(
 
     if has_sax_marker and unique_positions > 1 and unique_phases > 1:
         return "cine_sax"
-    if "sbtfe" in token and unique_positions >= 5 and unique_phases > 1:
+    # A complete Philips SAX cine stack normally has more slices, but some
+    # hospital acceptance exports retain only four contiguous basal slices.
+    # Four spatial positions still distinguish a stack from a single-plane
+    # long-axis cine, while the marker/phase checks above continue to reject
+    # localizers, perfusion and explicitly labelled LAX series.
+    if "sbtfe" in token and unique_positions >= 4 and unique_phases > 1:
         return "cine_sax"
     return "unknown"
 
@@ -357,7 +422,7 @@ def normalize_series_role(
         if has_sax_marker or slice_count > 1:
             return "lge_sax"
         return "lge_lax"
-    if role == "cine_sax" and _has_any_token(token, NON_FUNCTION_CINE_MARKERS):
+    if _has_any_token(token, NON_FUNCTION_CINE_MARKERS):
         return "unknown"
     if has_4ch_marker and phase_count > 1 and role in {"lge_lax", "unknown"}:
         return "cine_lax_4ch"
@@ -432,6 +497,205 @@ def _normal_from_orientation(orientation: list[float]) -> np.ndarray:
     return normal / np.linalg.norm(normal)
 
 
+def _dicom_time_seconds(value: Any) -> float | None:
+    raw = _safe_text(value)
+    match = re.match(r"^(\d{2})(\d{2})(\d{2}(?:\.\d+)?)", raw)
+    if not match:
+        return None
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    seconds = float(match.group(3))
+    if hours > 23 or minutes > 59 or seconds >= 60:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _split_sax_family(items: list[dict[str, Any]]) -> tuple[str, tuple[float, ...], int, int] | None:
+    if not items:
+        return None
+    first = items[0]
+    token = _series_role_token(
+        first["folder_path"],
+        first["series_description"],
+        first.get("protocol_name", ""),
+        first.get("image_type", ""),
+        first.get("scanning_sequence", ""),
+        first.get("sequence_variant", ""),
+        first.get("mr_acquisition_type", ""),
+        first.get("philips_slice_orientation", ""),
+    )
+    if _has_any_token(token, LGE_MARKERS + NON_FUNCTION_CINE_MARKERS):
+        return None
+    if _has_any_token(token, TWO_CH_MARKERS + THREE_CH_MARKERS + FOUR_CH_MARKERS):
+        return None
+    if not _has_any_token(token, CINE_MARKERS):
+        return None
+    if not (_has_any_token(token, SAX_MARKERS) or re.search(r"sax[_ -]?b\d+", token)):
+        return None
+
+    positions = {_position_group(item["image_position"]) for item in items}
+    if len(positions) != 1 or not 15 <= len(items) <= 50:
+        return None
+
+    description = first["series_description"].lower().strip()
+    protocol = first.get("protocol_name", "").lower().strip()
+    family = re.sub(r"sax[_ -]?b\d+", "sax_b#", f"{description} {protocol}")
+    family = re.sub(r"\s+", " ", family).strip()
+    orientation = tuple(round(float(value), 4) for value in first["image_orientation"][:6])
+    return family, orientation, int(first["rows"]), int(first["cols"])
+
+
+def _is_complete_split_sax_stack(members: list[tuple[str, list[dict[str, Any]]]]) -> bool:
+    if not 5 <= len(members) <= 20:
+        return False
+    first_items = [items[0] for _, items in members]
+    positions = [_position_group(item["image_position"]) for item in first_items]
+    if len(set(positions)) != len(positions):
+        return False
+    phase_counts = [len(items) for _, items in members]
+    if max(phase_counts) - min(phase_counts) > 2:
+        return False
+
+    normal = _normal_from_orientation(first_items[0]["image_orientation"])
+    coordinates = sorted(_position_key(item["image_position"], normal) for item in first_items)
+    gaps = [abs(right - left) for left, right in zip(coordinates, coordinates[1:])]
+    if not gaps or min(gaps) < 0.5:
+        return False
+    median_gap = float(np.median(gaps))
+    return all(0.4 * median_gap <= gap <= 2.5 * median_gap for gap in gaps)
+
+
+def _merge_split_sax_series_groups(
+    series_groups: dict[str, list[dict[str, Any]]],
+    study_uid: str,
+) -> int:
+    buckets: dict[tuple[str, tuple[float, ...], int, int], list[tuple[str, list[dict[str, Any]]]]] = defaultdict(list)
+    for group_key, items in series_groups.items():
+        family = _split_sax_family(items)
+        if family is not None:
+            buckets[family].append((group_key, items))
+
+    merge_count = 0
+    for candidates in buckets.values():
+        candidates.sort(
+            key=lambda member: (
+                member[1][0].get("acquisition_seconds")
+                if member[1][0].get("acquisition_seconds") is not None
+                else float("inf"),
+                int(member[1][0].get("series_number") or 0),
+            )
+        )
+        clusters: list[list[tuple[str, list[dict[str, Any]]]]] = []
+        current: list[tuple[str, list[dict[str, Any]]]] = []
+        current_positions: set[tuple[float, float, float]] = set()
+        previous_time: float | None = None
+        previous_number = 0
+        for member in candidates:
+            first = member[1][0]
+            position = _position_group(first["image_position"])
+            acquisition = first.get("acquisition_seconds")
+            series_number = int(first.get("series_number") or 0)
+            time_contiguous = (
+                previous_time is not None
+                and acquisition is not None
+                and 0 <= acquisition - previous_time <= 120
+            )
+            number_contiguous = previous_number > 0 and 0 < series_number - previous_number <= 2
+            should_split = bool(current) and (
+                position in current_positions or not (time_contiguous or number_contiguous)
+            )
+            if should_split:
+                clusters.append(current)
+                current = []
+                current_positions = set()
+            current.append(member)
+            current_positions.add(position)
+            previous_time = acquisition
+            previous_number = series_number
+        if current:
+            clusters.append(current)
+
+        for cluster in clusters:
+            if not _is_complete_split_sax_stack(cluster):
+                continue
+            source_uids = sorted(
+                str(items[0].get("source_series_uid") or group_key)
+                for group_key, items in cluster
+            )
+            digest = hashlib.sha1("\n".join(source_uids).encode("utf-8")).hexdigest()[:20]
+            merged_key = f"{study_uid}:logical-sax:{digest}"
+            merged_items = [item for _, items in cluster for item in items]
+            for group_key, _ in cluster:
+                series_groups.pop(group_key, None)
+            for item in merged_items:
+                item["series_uid"] = merged_key
+            series_groups[merged_key] = merged_items
+            merge_count += 1
+    return merge_count
+
+
+def _source_scoped_study_uid(dicom_study_uid: str, source_path: str) -> str:
+    """Return a stable internal study key for ambiguous DICOM identities.
+
+    The source path is deliberately included only in the fallback identity.  A
+    well-formed, non-colliding StudyInstanceUID therefore keeps its historical
+    database value, while missing or reused UIDs cannot alias another import.
+    """
+
+    try:
+        normalized_source = str(Path(source_path).expanduser().resolve())
+    except OSError:
+        normalized_source = str(Path(source_path).expanduser().absolute())
+    digest = hashlib.sha256(normalized_source.encode("utf-8")).hexdigest()
+    prefix = dicom_study_uid or "missing-study-uid"
+    return f"{prefix}:source:{digest}"
+
+
+def _resolve_internal_study_uid(conn, *, dicom_study_uid: str, source_path: str) -> str:
+    """Resolve the database identity without claiming another source's study."""
+
+    same_source = conn.execute(
+        "SELECT study_uid FROM studies WHERE source_path = ? ORDER BY id DESC LIMIT 1",
+        (source_path,),
+    ).fetchone()
+    if same_source is not None:
+        # Preserve the identity (and therefore series identities/state matching)
+        # established by the first successful import of this exact source.
+        return str(same_source["study_uid"])
+
+    if dicom_study_uid:
+        uid_owner = conn.execute(
+            "SELECT source_path FROM studies WHERE study_uid = ? LIMIT 1",
+            (dicom_study_uid,),
+        ).fetchone()
+        if uid_owner is None:
+            return dicom_study_uid
+
+    return _source_scoped_study_uid(dicom_study_uid, source_path)
+
+
+def _scope_series_groups_to_study(
+    series_groups: dict[str, list[dict[str, Any]]],
+    *,
+    dicom_study_uid: str,
+    internal_study_uid: str,
+) -> None:
+    """Make series/frame keys unique when the study needed a source scope."""
+
+    if internal_study_uid == dicom_study_uid:
+        return
+
+    scoped_groups: dict[str, list[dict[str, Any]]] = {}
+    for group_key, items in series_groups.items():
+        group_digest = hashlib.sha256(group_key.encode("utf-8")).hexdigest()
+        scoped_key = f"{internal_study_uid}:series:{group_digest}"
+        for item in items:
+            item["series_uid"] = scoped_key
+        scoped_groups[scoped_key] = items
+    series_groups.clear()
+    series_groups.update(scoped_groups)
+
+
 def _study_patient_demographics_from_source(source_path: str) -> dict[str, str]:
     try:
         root = sanitize_source_path(source_path)
@@ -461,12 +725,11 @@ def _study_patient_demographics_from_source(source_path: str) -> dict[str, str]:
 def _snapshot_existing_study_state(
     conn,
     *,
-    study_uid: str,
     source_path: str,
 ) -> dict[str, Any]:
     study_rows = conn.execute(
-        "SELECT id FROM studies WHERE study_uid = ? OR source_path = ?",
-        (study_uid, source_path),
+        "SELECT id FROM studies WHERE source_path = ?",
+        (source_path,),
     ).fetchall()
     if not study_rows:
         return {"contours": {}, "measurements": {}, "report": None}
@@ -722,6 +985,13 @@ def import_study(source_path: str) -> int:
 
     for file_path in dcm_files:
         ds = pydicom.dcmread(str(file_path), stop_before_pixels=True, force=True)
+        rows = _safe_int(getattr(ds, "Rows", 0))
+        cols = _safe_int(getattr(ds, "Columns", 0))
+        if not _is_image_storage_dataset(ds) or rows <= 0 or cols <= 0:
+            # Raw Data Storage, presentation states, structured reports and
+            # similar DICOM objects may even carry matrix dimensions, but they
+            # are not displayable image frames for the workstation.
+            continue
         study_uid = _safe_text(getattr(ds, "StudyInstanceUID", ""))
         series_uid = _safe_text(getattr(ds, "SeriesInstanceUID", ""))
         series_description = _safe_text(getattr(ds, "SeriesDescription", file_path.parent.name))
@@ -751,6 +1021,11 @@ def import_study(source_path: str) -> int:
             "file_path": str(file_path),
             "folder_path": str(file_path.parent),
             "series_uid": series_group_key,
+            "source_series_uid": series_uid,
+            "series_number": _safe_int(getattr(ds, "SeriesNumber", 0)),
+            "acquisition_seconds": _dicom_time_seconds(
+                getattr(ds, "AcquisitionTime", "") or getattr(ds, "SeriesTime", "")
+            ),
             "series_description": series_description,
             "protocol_name": protocol_name,
             "image_type": image_type,
@@ -758,8 +1033,8 @@ def import_study(source_path: str) -> int:
             "sequence_variant": sequence_variant,
             "mr_acquisition_type": mr_acquisition_type,
             "philips_slice_orientation": philips_slice_orientation,
-            "rows": _safe_int(getattr(ds, "Rows", 0)),
-            "cols": _safe_int(getattr(ds, "Columns", 0)),
+            "rows": rows,
+            "cols": cols,
             "pixel_spacing_x": px,
             "pixel_spacing_y": py,
             "slice_thickness": _safe_float(getattr(ds, "SliceThickness", 8.0), 8.0),
@@ -772,17 +1047,35 @@ def import_study(source_path: str) -> int:
         series_groups[series_group_key].append(item)
 
     if not study_info:
-        raise ValueError("Unable to derive study information from DICOM files.")
+        raise ValueError(
+            "No renderable DICOM image objects with positive Rows and Columns "
+            "were found in the selected folder."
+        )
+
+    dicom_study_uid = study_info["study_uid"]
+    _merge_split_sax_series_groups(series_groups, dicom_study_uid)
 
     with get_conn() as conn:
-        existing_state = _snapshot_existing_study_state(
+        # Serialize identity resolution with the replacement write so two
+        # simultaneous imports cannot both claim the same raw StudyInstanceUID.
+        conn.execute("BEGIN IMMEDIATE")
+        internal_study_uid = _resolve_internal_study_uid(
             conn,
-            study_uid=study_info["study_uid"],
+            dicom_study_uid=dicom_study_uid,
             source_path=study_info["source_path"],
         )
+        existing_state = _snapshot_existing_study_state(
+            conn,
+            source_path=study_info["source_path"],
+        )
+        _scope_series_groups_to_study(
+            series_groups,
+            dicom_study_uid=dicom_study_uid,
+            internal_study_uid=internal_study_uid,
+        )
         conn.execute(
-            "DELETE FROM studies WHERE study_uid = ? OR source_path = ?",
-            (study_info["study_uid"], study_info["source_path"]),
+            "DELETE FROM studies WHERE source_path = ?",
+            (study_info["source_path"],),
         )
 
         conn.execute(
@@ -793,7 +1086,7 @@ def import_study(source_path: str) -> int:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                study_info["study_uid"],
+                internal_study_uid,
                 study_info["patient_name"],
                 study_info["patient_id"],
                 study_info["patient_sex"],

@@ -5,9 +5,31 @@ export interface WorkstationChangeLogEntry {
 }
 
 // Update both the version and changelog entries whenever the workstation UI changes.
-export const WORKSTATION_VERSION = 'v2026.07.12-1';
+export const WORKSTATION_VERSION = 'v2026.07.16-4';
 
 export const WORKSTATION_CHANGELOG: WorkstationChangeLogEntry[] = [
+  {
+    version: 'v2026.07.16-4',
+    date: '2026-07-16',
+    items: [
+      '左房功能新增 Reservoir、Conduit、Contractile 三类轮廓应变 proxy 和全时相曲线。',
+      '追踪验证新增左房 ROI，可查看相邻人工相位的 Dice、边界误差、面积差和平均光流位移。',
+      'Series Overview 新增 2CH、3CH 角色；未来导入的明确命名序列可自动识别，未明确命名的旧序列保持原角色。',
+      '新增 2CH+4CH 双平面面积-长度容积计算，并按关键相位来源和 TriggerTime 容差校验跨序列配对。',
+      '左房面板支持保存 BSA，双平面数据就绪后输出 LAVi max、pre-A 和 min；不新增数据库字段。'
+    ]
+  },
+  {
+    version: 'v2026.07.16-1',
+    date: '2026-07-16',
+    items: [
+      '4CH 科研指标新增左房功能面板：基于左房轮廓输出 LAVmax、LAVpre-A、LAVmin，以及总、被动和主动排空分数。',
+      '新增左房单平面面积-长度容积曲线、关键相位来源和全时相勾画完整度；关键容积卡片可跳转到对应 Slice / Phase。',
+      '心外膜脂肪新增逐帧灰度阈值预览，可查看保留区域与低信号排除区域，并在应用后参与体积重算。',
+      '4CH 主视图新增毫米标尺；SAM、擦除和毛刷光标改用不同颜色，减少灰度图像上的工具混淆。',
+      '补强 LGE n-SD / FWHM、Grey Zone、MVO 和多排除区计算回归，保持现有 LGE 工作流结果一致。'
+    ]
+  },
   {
     version: 'v2026.07.12-1',
     date: '2026-07-12',

@@ -5,6 +5,7 @@ from extensions import db
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+from sqlalchemy import CheckConstraint, DDL, event
 
 # 配置 HuggingFace 镜像源（解决网络连接问题）
 # 方法1: 设置环境变量（如果支持）
@@ -129,7 +130,6 @@ class CviCaseCatalog(db.Model):
             'dataset': self.dataset,
             'case_id': self.case_id,
             'full_id': self.full_id,
-            'path': self.path,
             'sequence_summary': self.sequence_summary or [],
             'dicom_count': self.dicom_count or 0,
             'has_dicom': bool(self.has_dicom),
@@ -168,6 +168,122 @@ class CaseAssignment(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'active': bool(self.active),
         }
+
+
+class DatasetAccessGrant(db.Model):
+    """Persistent whole-dataset access, separate from per-case work assignment."""
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'namespace',
+            'dataset',
+            'user_id',
+            name='uq_dataset_access_grant_target_user',
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    namespace = db.Column(db.String(50), nullable=False, default='functional')
+    dataset = db.Column(db.String(100), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    active = db.Column(db.Boolean, default=True, nullable=False)
+
+    user = db.relationship(
+        'User',
+        foreign_keys=[user_id],
+        backref=db.backref('dataset_access_grants', lazy=True),
+    )
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'namespace': self.namespace,
+            'dataset': self.dataset,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'created_by': self.created_by.username if self.created_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'active': bool(self.active),
+        }
+
+
+class DatasetAccessAudit(db.Model):
+    """Append-only history for whole-dataset permission changes."""
+
+    __table_args__ = (
+        CheckConstraint("action IN ('grant', 'revoke')", name='ck_dataset_access_audit_action'),
+        db.UniqueConstraint(
+            'batch_id',
+            'namespace',
+            'dataset',
+            'target_user_id',
+            name='uq_dataset_access_audit_batch_target',
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.String(36), nullable=False, index=True)
+    namespace = db.Column(db.String(50), nullable=False)
+    dataset = db.Column(db.String(100), nullable=False)
+    dataset_label = db.Column(db.String(200), nullable=False)
+    target_user_id = db.Column(db.Integer, nullable=False)
+    target_username = db.Column(db.String(64), nullable=False)
+    action = db.Column(db.String(16), nullable=False)
+    actor_user_id = db.Column(db.Integer, nullable=False)
+    actor_username = db.Column(db.String(64), nullable=False)
+    request_ip = db.Column(db.String(64), nullable=False, default='')
+    release_version = db.Column(db.String(64), nullable=False, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'batch_id': self.batch_id,
+            'namespace': self.namespace,
+            'dataset': self.dataset,
+            'dataset_label': self.dataset_label,
+            'target_user_id': self.target_user_id,
+            'target_username': self.target_username,
+            'action': self.action,
+            'actor_user_id': self.actor_user_id,
+            'actor_username': self.actor_username,
+            'request_ip': self.request_ip,
+            'release_version': self.release_version,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+event.listen(
+    DatasetAccessAudit.__table__,
+    'after_create',
+    DDL(
+        """
+        CREATE TRIGGER IF NOT EXISTS dataset_access_audit_no_update
+        BEFORE UPDATE ON dataset_access_audit
+        BEGIN
+            SELECT RAISE(ABORT, 'dataset_access_audit is append-only');
+        END
+        """
+    ).execute_if(dialect='sqlite'),
+)
+event.listen(
+    DatasetAccessAudit.__table__,
+    'after_create',
+    DDL(
+        """
+        CREATE TRIGGER IF NOT EXISTS dataset_access_audit_no_delete
+        BEFORE DELETE ON dataset_access_audit
+        BEGIN
+            SELECT RAISE(ABORT, 'dataset_access_audit is append-only');
+        END
+        """
+    ).execute_if(dialect='sqlite'),
+)
 
 
 class MediaAccessLog(db.Model):
@@ -756,6 +872,15 @@ class FeedbackIssue(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+        if include_paths:
+            payload.update({
+                'worktree_path': self.worktree_path or '',
+                'artifact_dir': self.artifact_dir or '',
+            })
+        return payload
+        latest_codex_run = self.codex_runs[-1] if self.codex_runs else None
+        if latest_codex_run is not None:
+            payload['codex_investigation'] = latest_codex_run.to_dict(include_result=False)
         if include_user:
             payload.update({
                 'reporter_id': self.reporter_id,
@@ -797,6 +922,157 @@ class FeedbackWorkPlan(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class FeedbackCodexRun(db.Model):
+    __tablename__ = 'feedback_codex_run'
+
+    id = db.Column(db.Integer, primary_key=True)
+    issue_id = db.Column(db.Integer, db.ForeignKey('feedback_issue.id'), nullable=False, index=True)
+    initiated_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)
+    status = db.Column(db.String(24), default='pending', nullable=False, index=True)
+    phase = db.Column(db.String(24), default='investigation', nullable=False)
+    revision_note = db.Column(db.Text, default='', nullable=False)
+    base_sha = db.Column(db.String(64), default='', nullable=False)
+    branch = db.Column(db.String(160), default='', nullable=False)
+    dirty_worktree = db.Column(db.Boolean, default=False, nullable=False)
+    model_name = db.Column(db.String(120), default='', nullable=False)
+    prompt_hash = db.Column(db.String(64), default='', nullable=False)
+    result_json = db.Column(db.JSON, nullable=False, default=dict)
+    error_message = db.Column(db.Text, default='', nullable=False)
+    artifact_dir = db.Column(db.Text, default='', nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    issue = db.relationship(
+        'FeedbackIssue',
+        backref=db.backref(
+            'codex_runs',
+            lazy=True,
+            cascade='all, delete-orphan',
+            order_by='FeedbackCodexRun.id',
+        ),
+    )
+    initiated_by = db.relationship('User')
+
+    def to_dict(self, include_result=True):
+        payload = {
+            'id': self.id,
+            'issue_id': self.issue_id,
+            'status': self.status or 'pending',
+            'phase': self.phase or 'investigation',
+            'revision_note': self.revision_note or '',
+            'base_sha': self.base_sha or '',
+            'branch': self.branch or '',
+            'dirty_worktree': bool(self.dirty_worktree),
+            'model_name': self.model_name or '',
+            'prompt_hash': self.prompt_hash or '',
+            'error_message': self.error_message or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_result:
+            payload['result'] = self.result_json or {}
+        return payload
+
+
+class FeedbackExecutionRun(db.Model):
+    """Auditable Codex change candidate produced in an isolated Git worktree."""
+
+    __tablename__ = 'feedback_execution_run'
+    __table_args__ = (
+        db.UniqueConstraint('work_plan_id', 'attempt', name='uq_feedback_execution_plan_attempt'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    issue_id = db.Column(db.Integer, db.ForeignKey('feedback_issue.id'), nullable=False, index=True)
+    work_plan_id = db.Column(db.Integer, db.ForeignKey('feedback_work_plan.id'), nullable=False, index=True)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    initiated_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    reviewed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)
+    merged_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)
+    status = db.Column(db.String(32), default='queued', nullable=False, index=True)
+    phase = db.Column(db.String(48), default='queued', nullable=False)
+    base_sha = db.Column(db.String(64), nullable=False)
+    target_branch = db.Column(db.String(160), default='main', nullable=False)
+    candidate_branch = db.Column(db.String(200), default='', nullable=False)
+    candidate_sha = db.Column(db.String(64), default='', nullable=False)
+    worktree_path = db.Column(db.Text, default='', nullable=False)
+    artifact_dir = db.Column(db.Text, default='', nullable=False)
+    process_id = db.Column(db.Integer)
+    exit_code = db.Column(db.Integer)
+    model_name = db.Column(db.String(120), default='', nullable=False)
+    prompt_hash = db.Column(db.String(64), default='', nullable=False)
+    plan_snapshot_json = db.Column(db.JSON, nullable=False, default=dict)
+    plan_hash = db.Column(db.String(64), default='', nullable=False)
+    diff_hash = db.Column(db.String(64), default='', nullable=False)
+    changed_files_json = db.Column(db.JSON, nullable=False, default=list)
+    tests_json = db.Column(db.JSON, nullable=False, default=dict)
+    tests_passed = db.Column(db.Boolean)
+    review_note = db.Column(db.Text, default='', nullable=False)
+    merge_note = db.Column(db.Text, default='', nullable=False)
+    error_message = db.Column(db.Text, default='', nullable=False)
+    stop_requested = db.Column(db.Boolean, default=False, nullable=False)
+    version = db.Column(db.Integer, default=1, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+    reviewed_at = db.Column(db.DateTime)
+    merged_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    issue = db.relationship('FeedbackIssue', backref=db.backref('execution_runs', lazy=True))
+    work_plan = db.relationship('FeedbackWorkPlan', backref=db.backref('execution_runs', lazy=True))
+    initiated_by = db.relationship('User', foreign_keys=[initiated_by_id])
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_id])
+    merged_by = db.relationship('User', foreign_keys=[merged_by_id])
+
+    def to_dict(self, include_paths=False):
+        files = self.changed_files_json if isinstance(self.changed_files_json, list) else []
+        tests = self.tests_json if isinstance(self.tests_json, dict) else {}
+        payload = {
+            'id': self.id,
+            'issue_id': self.issue_id,
+            'work_plan_id': self.work_plan_id,
+            'attempt': self.attempt,
+            'status': self.status or 'queued',
+            'phase': self.phase or 'queued',
+            'base_sha': self.base_sha or '',
+            'target_branch': self.target_branch or 'main',
+            'candidate_branch': self.candidate_branch or '',
+            'candidate_sha': self.candidate_sha or '',
+            'model_name': self.model_name or '',
+            'plan_hash': self.plan_hash or '',
+            'diff_hash': self.diff_hash or '',
+            'changed_files': files,
+            'changed_file_count': len(files),
+            'tests': tests,
+            'tests_passed': self.tests_passed,
+            'review_note': self.review_note or '',
+            'merge_note': self.merge_note or '',
+            'error_message': self.error_message or '',
+            'stop_requested': bool(self.stop_requested),
+            'version': int(self.version or 1),
+            'initiated_by': self.initiated_by.username if self.initiated_by else None,
+            'reviewed_by': self.reviewed_by.username if self.reviewed_by else None,
+            'merged_by': self.merged_by.username if self.merged_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+            'merged_at': self.merged_at.isoformat() if self.merged_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_paths:
+            payload.update({
+                'worktree_path': self.worktree_path or '',
+                'artifact_dir': self.artifact_dir or '',
+            })
+        return payload
 
 class MedicalMultimodalClassifier(nn.Module):
     """医学多模态分类器：结合医学影像和指令进行分类"""

@@ -234,6 +234,41 @@
   transition: grid-template-columns 0.18s ease;
 }
 
+.uws-feedback-panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: visible;
+}
+
+.uws-feedback-resizer {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  z-index: 8;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  outline: 0;
+}
+
+.uws-feedback-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 4px;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+}
+
+.uws-feedback-resizer:hover::after,
+.uws-feedback-resizer:focus-visible::after,
+.uws-is-resizing .uws-feedback-resizer::after {
+  background: var(--uws-accent-2);
+}
+
 .uws-case-panel {
   position: relative;
   min-height: 0;
@@ -331,6 +366,14 @@
 .uws-is-resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+.uws-is-resizing .uws-main {
+  transition: none;
+}
+
+.uws-is-resizing iframe {
+  pointer-events: none;
 }
 
 .uws-case-head {
@@ -497,77 +540,21 @@
   overflow: auto;
 }
 
+.uws-capability-note {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .uws-external-frame {
   min-height: 0;
-}
-
-.uws-patient-nav {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: min(470px, 40vw);
-  padding: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(10px);
-}
-
-.uws-patient-nav-button {
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--uws-line);
-  border-radius: 6px;
-  color: var(--uws-text);
-  background: rgba(255, 255, 255, 0.07);
-  padding: 5px 9px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.uws-patient-nav-button:hover {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.uws-patient-nav-button.is-primary {
-  color: #111;
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--uws-accent-2), #7d9740);
-}
-
-.uws-patient-nav-button.is-primary:hover {
-  filter: brightness(1.04);
-}
-
-.uws-patient-nav-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  filter: none;
-}
-
-.uws-patient-nav-current {
-  min-width: 132px;
-  max-width: 210px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 1px 7px;
-}
-
-.uws-patient-nav-current span {
-  color: var(--uws-muted);
-  font-size: 10px;
-}
-
-.uws-patient-nav-current strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--uws-text);
-  font-size: 13px;
 }
 
 .uws-frame {
@@ -668,8 +655,4 @@
     min-width: 180px;
   }
 
-  .uws-patient-nav-current {
-    min-width: 112px;
-    max-width: 150px;
-  }
 }

@@ -45,6 +45,7 @@ const StructureAssessmentView: React.FC<StructureAssessmentViewProps> = ({
   const { t } = useLanguage();
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [activeTab, setActiveTab] = useState<'SAX' | '4CH' | 'LGE'>('SAX');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isMeasureMode, setIsMeasureMode] = useState(false);
@@ -90,16 +91,20 @@ const StructureAssessmentView: React.FC<StructureAssessmentViewProps> = ({
 
   const fetchCaseDetail = async (ds: string, id: string) => {
     setLoading(true);
+    setLoadError('');
+    setCaseDetail(null);
     setFormData({}); // Reset form
     const reviewQuery = reviewUserId ? `?review_user_id=${reviewUserId}` : '';
     try {
       // Fetch image data
       const resImages = await fetch(`/api/functional/cases/${ds}/${id}${reviewQuery}`);
       const dataImages = await resImages.json();
+      if (!resImages.ok) throw new Error(dataImages.error || `病例影像加载失败（HTTP ${resImages.status}）`);
       
       // Fetch structure assessment data
       const resStruct = await fetch(`/api/structure/cases/${ds}/${id}${reviewQuery}`);
       const dataStruct = await resStruct.json();
+      if (!resStruct.ok) throw new Error(dataStruct.error || `结构评估加载失败（HTTP ${resStruct.status}）`);
       
       setCaseDetail({
           ...dataImages,
@@ -122,6 +127,7 @@ const StructureAssessmentView: React.FC<StructureAssessmentViewProps> = ({
       }
     } catch (err) {
       console.error("Failed to fetch case detail", err);
+      setLoadError(err instanceof Error ? err.message : '病例影像加载失败');
     } finally {
       setLoading(false);
     }
@@ -479,7 +485,7 @@ const StructureAssessmentView: React.FC<StructureAssessmentViewProps> = ({
                 />
               </>
             ) : (
-              <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: '#666' }}>{t('common.no_data')}</div>
+              <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: loadError ? '#fca5a5' : '#666', padding: 24, textAlign: 'center' }}>{loadError || t('common.no_data')}</div>
             )}
           </div>
 

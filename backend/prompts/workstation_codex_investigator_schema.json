@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "investigation_summary",
+    "root_cause",
+    "confidence",
+    "evidence",
+    "recommended_changes",
+    "risks",
+    "verification_steps",
+    "execution_scope",
+    "reproducibility",
+    "data_requirements",
+    "clarifying_question"
+  ],
+  "properties": {
+    "investigation_summary": { "type": "string" },
+    "root_cause": { "type": "string" },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "line_start", "line_end", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "line_start": { "type": "integer", "minimum": 1 },
+          "line_end": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "recommended_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change", "rationale"],
+        "properties": {
+          "path": { "type": "string" },
+          "change": { "type": "string" },
+          "rationale": { "type": "string" }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["level", "risk", "mitigation"],
+        "properties": {
+          "level": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+          "risk": { "type": "string" },
+          "mitigation": { "type": "string" }
+        }
+      }
+    },
+    "verification_steps": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "execution_scope": {
+      "type": "string",
+      "enum": ["guidance_only", "minimal_candidate", "needs_review", "large_change"]
+    },
+    "reproducibility": {
+      "type": "string",
+      "enum": ["code_only", "demo_cases", "production_data_required"]
+    },
+    "data_requirements": { "type": "string" },
+    "clarifying_question": { "type": "string" }
+  }
+}

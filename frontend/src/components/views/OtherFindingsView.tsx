@@ -32,6 +32,7 @@ const OtherFindingsView: React.FC<OtherFindingsViewProps> = ({ dataset, caseId, 
   const { t } = useLanguage();
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [activeTab, setActiveTab] = useState<'SAX' | '4CH' | 'LGE'>('SAX');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isMeasureMode, setIsMeasureMode] = useState(false);
@@ -62,11 +63,14 @@ const OtherFindingsView: React.FC<OtherFindingsViewProps> = ({ dataset, caseId, 
 
   const fetchCaseDetail = async (ds: string, id: string) => {
     setLoading(true);
+    setLoadError('');
+    setCaseDetail(null);
     setFormData({}); // Reset form
     const reviewQuery = reviewUserId ? `?review_user_id=${reviewUserId}` : '';
     try {
       const res = await fetch(`/api/other-findings/cases/${ds}/${id}${reviewQuery}`);
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `其他发现加载失败（HTTP ${res.status}）`);
       setCaseDetail(data);
       
       // Auto select first available sequence
@@ -79,6 +83,7 @@ const OtherFindingsView: React.FC<OtherFindingsViewProps> = ({ dataset, caseId, 
       }
     } catch (err) {
       console.error("Failed to fetch case detail", err);
+      setLoadError(err instanceof Error ? err.message : '病例影像加载失败');
     } finally {
       setLoading(false);
     }
@@ -299,7 +304,7 @@ const OtherFindingsView: React.FC<OtherFindingsViewProps> = ({ dataset, caseId, 
                 </div>
             </>
         ) : (
-            <div style={{ color: '#666' }}>No images available for this sequence</div>
+            <div style={{ color: loadError ? '#fca5a5' : '#666', padding: 24, textAlign: 'center' }}>{loadError || '当前序列没有可用影像'}</div>
         )}
       </div>
 

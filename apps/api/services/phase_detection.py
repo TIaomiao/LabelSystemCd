@@ -299,7 +299,7 @@ def _detect_4ch_function_phases(series: dict, frames: list[dict]) -> dict:
                 contour_scores.extend({"phase_index": phase, "chamber": "lv_heuristic", "area": round(score, 2)} for phase, score in sorted(heuristic_scores.items()))
 
     if "lv_ed" not in labels or "lv_es" not in labels:
-        raise ValueError("自动识别 4CH 相位失败，建议先勾画一帧左室或使用 SAX 结果。")
+        raise ValueError("自动识别长轴相位失败，建议先勾画一帧左室或使用 SAX 结果。")
 
     base_labels = _labels_from_ventricular_phases(labels["lv_ed"], labels["lv_es"], phase_count)
     for key, value in base_labels.items():
@@ -329,6 +329,6 @@ def detect_function_phases(series_id: int) -> dict:
 
     if series["role"] == "cine_sax":
         return _detect_sax_function_phases(series, frames)
-    if series["role"] == "cine_lax_4ch":
+    if series["role"] in {"cine_lax_2ch", "cine_lax_3ch", "cine_lax_4ch"}:
         return _detect_4ch_function_phases(series, frames)
-    raise ValueError("快速相位识别目前只支持 cine_sax 或 cine_lax_4ch。")
+    raise ValueError("快速相位识别目前只支持 cine_sax 或 cine_lax_2ch/3ch/4ch。")

@@ -148,6 +148,8 @@ const ExperimentResultsPage: React.FC = () => {
                           <img 
                             src={`${apiBase}/experiment/image/${meas.name}/${imgType}`} 
                             alt={`${meas.name} ${imgType}`}
+                            loading="lazy"
+                            decoding="async"
                             draggable={false}
                             onContextMenu={(event) => event.preventDefault()}
                             onError={(e) => {

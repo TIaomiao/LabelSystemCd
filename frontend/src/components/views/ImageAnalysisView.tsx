@@ -39,6 +39,7 @@ const ImageAnalysisView: React.FC<ImageAnalysisViewProps> = ({
   const { t } = useLanguage();
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [activeTab, setActiveTab] = useState<'SAX' | '4CH' | 'LGE'>('SAX');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   // Dual View State
@@ -98,6 +99,8 @@ const ImageAnalysisView: React.FC<ImageAnalysisViewProps> = ({
 
   const fetchCaseDetail = async (ds: string, id: string) => {
     setLoading(true);
+    setLoadError('');
+    setCaseDetail(null);
     setFormData({}); // Reset form
     const reviewQuery = reviewUserId ? `?review_user_id=${reviewUserId}` : '';
     try {
@@ -139,7 +142,14 @@ const ImageAnalysisView: React.FC<ImageAnalysisViewProps> = ({
       }
 
       if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
+          let errorDetail = '';
+          try {
+            const payload = await res.json();
+            errorDetail = payload.error || '';
+          } catch {
+            // Keep the status-based fallback when the backend did not return JSON.
+          }
+          throw new Error(errorDetail || `影像质量加载失败（HTTP ${res.status}）`);
       }
       const data = await res.json();
       setCaseDetail(data);
@@ -166,6 +176,7 @@ const ImageAnalysisView: React.FC<ImageAnalysisViewProps> = ({
     } catch (err) {
       console.error("Failed to fetch case detail", err);
       setCaseDetail(null);
+      setLoadError(err instanceof Error ? err.message : '病例影像加载失败');
     } finally {
       setLoading(false);
     }
@@ -562,7 +573,7 @@ const ImageAnalysisView: React.FC<ImageAnalysisViewProps> = ({
                   />
                 </>
               ) : (
-                <div style={{ color: '#666' }}>{t('common.no_data')}</div>
+                <div style={{ color: loadError ? '#fca5a5' : '#666', padding: 24, textAlign: 'center' }}>{loadError || t('common.no_data')}</div>
               )}
             </div>
 

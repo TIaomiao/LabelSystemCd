@@ -6,7 +6,7 @@ import secrets
 from urllib.parse import quote
 from routes import register_routes
 from extensions import db, login_manager
-from models import User
+from models import User, FeedbackExecutionRun
 
 app = Flask(__name__)
 
@@ -43,10 +43,16 @@ def _cors_origins():
 CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": _cors_origins()}})
 
 # Configuration
-app.config['DATA_ROOT'] = '/home/Larry/data/CMR_SCS'
-app.config['EVAL_ROOT'] = '/home/Larry/code/Ziqiu/MRIAgent/src/output'
-app.config['CMR_ALL_REPORT100_CASE_LIST'] = '/home/Larry/code/Ziqiu/LabelSystem/tmp/km_replacement_strict2025_latest_correctroot_relative_paths.txt'
-app.config['FUNCTIONAL_DATA_ROOT'] = '/home/Larry/code/Ziqiu/MRIAgent/data'
+app.config['DATA_ROOT'] = os.environ.get('LABELSYSTEM_DATA_ROOT', '/home/Larry/data/CMR_SCS')
+app.config['EVAL_ROOT'] = os.environ.get('LABELSYSTEM_EVAL_ROOT', '/home/Larry/code/Ziqiu/MRIAgent/src/output')
+app.config['CMR_ALL_REPORT100_CASE_LIST'] = os.environ.get(
+    'LABELSYSTEM_REPORT_CASE_LIST',
+    '/home/Larry/code/Ziqiu/LabelSystem/tmp/km_replacement_strict2025_latest_correctroot_relative_paths.txt',
+)
+app.config['FUNCTIONAL_DATA_ROOT'] = os.environ.get(
+    'LABELSYSTEM_FUNCTIONAL_DATA_ROOT',
+    '/home/Larry/code/Ziqiu/MRIAgent/data',
+)
 _multicenter_data_root = os.path.dirname(app.config['DATA_ROOT'])
 app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
     {
@@ -78,6 +84,40 @@ app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
         'case_id_prefix': 'SCS2-',
     },
     {
+        'dataset': 'CMR_SCS_PAH_TEST',
+        'label': '四川省人民医院-PAH曲率验收',
+        'path': os.environ.get(
+            'CMR_SCS_PAH_TEST_ROOT',
+            os.path.join(
+                os.path.dirname(app.root_path),
+                'zian_workspace',
+                '省医院参观',
+                'PAH-TEST',
+            ),
+        ),
+        # Each PAH case contains a numeric series subdirectory; keep the
+        # top-level PAH label as the catalogue case instead of splitting it.
+        'case_dir_contains_dicoms': True,
+        # This external clinical acceptance library must remain deny-by-default
+        # for non-admin users and only appear through explicit assignments.
+        'private_by_assignment': True,
+    },
+    {
+        'dataset': 'CMR_SCS_PAH_1',
+        'label': '四川省人民医院-PAH第一大类SAX',
+        'path': os.environ.get(
+            'CMR_SCS_PAH_1_ROOT',
+            os.path.join('/home/Larry/data/SCS_PAH-1', '第一大类SAX'),
+        ),
+        # Each numbered case contains one or more numeric SAX series folders.
+        # Keep 001-041 as the catalogue cases instead of splitting case 014
+        # into its per-slice series directories.
+        'case_dir_contains_dicoms': True,
+        # Hospital acceptance data is visible only through exact assignments;
+        # administrators retain their existing system-level access.
+        'private_by_assignment': True,
+    },
+    {
         'dataset': 'CMR_YA',
         'label': '延安医院',
         'path': '/home/Larry/data/CMR_YA/merged_files',
@@ -95,7 +135,25 @@ app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
         'case_dir_contains_dicoms': True,
     },
 ]
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(app.root_path, 'instance', 'labelsystem.db')
+_demo_case_root = os.environ.get('LABELSYSTEM_DEMO_CASE_ROOT', '').strip()
+if _demo_case_root:
+    # Demo mode keeps the complete application code while exposing only the
+    # explicitly provisioned, de-identified case root.
+    app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
+        {
+            'dataset': 'DEMO',
+            'label': 'Demo cases',
+            'path': os.path.abspath(os.path.expanduser(_demo_case_root)),
+        },
+    ]
+
+_database_uri = os.environ.get('LABELSYSTEM_DATABASE_URI', '').strip()
+_database_path = os.environ.get('LABELSYSTEM_DB_PATH', '').strip()
+if not _database_uri and _database_path:
+    _database_uri = 'sqlite:///' + os.path.abspath(os.path.expanduser(_database_path))
+app.config['SQLALCHEMY_DATABASE_URI'] = _database_uri or (
+    'sqlite:///' + os.path.join(app.root_path, 'instance', 'labelsystem.db')
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'connect_args': {'timeout': 30}
@@ -213,6 +271,64 @@ def _ensure_user_schema():
         if eval_columns and 'dimension_scores' not in eval_columns:
             conn.exec_driver_sql("ALTER TABLE evaluation_result ADD COLUMN dimension_scores TEXT")
 
+        audit_columns = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(dataset_access_audit)").fetchall()
+        }
+        if audit_columns:
+            conn.exec_driver_sql(
+                """
+                CREATE TRIGGER IF NOT EXISTS dataset_access_audit_no_update
+                BEFORE UPDATE ON dataset_access_audit
+                BEGIN
+                    SELECT RAISE(ABORT, 'dataset_access_audit is append-only');
+                END
+                """
+            )
+            conn.exec_driver_sql(
+                """
+                CREATE TRIGGER IF NOT EXISTS dataset_access_audit_no_delete
+                BEFORE DELETE ON dataset_access_audit
+                BEGIN
+                    SELECT RAISE(ABORT, 'dataset_access_audit is append-only');
+                END
+                """
+            )
+
+        # A web-process restart must never make an interrupted code-changing
+        # task look as if it is still safely supervised. Preserve its artifacts
+        # and fail closed; an administrator can inspect and explicitly retry.
+        execution_columns = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(feedback_execution_run)").fetchall()
+        }
+        if execution_columns:
+            conn.exec_driver_sql(
+                """
+                UPDATE feedback_execution_run
+                SET status = 'review_approved',
+                    phase = 'merge_interrupted',
+                    error_message = '服务在合并阶段重启；请重新点击合并，控制器会核对 candidate SHA 并幂等完成。',
+                    process_id = NULL,
+                    updated_at = CURRENT_TIMESTAMP,
+                    version = version + 1
+                WHERE status = 'merging'
+                """
+            )
+            conn.exec_driver_sql(
+                """
+                UPDATE feedback_execution_run
+                SET status = 'failed',
+                    phase = 'interrupted_by_restart',
+                    error_message = '服务重启中断了受控执行；日志和工作树已保留，请人工检查后重试。',
+                    process_id = NULL,
+                    finished_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP,
+                    version = version + 1
+                WHERE status IN ('queued', 'preparing', 'running', 'stopping')
+                """
+            )
+
 # Register Hospital Browser Blueprint
 from hospital_browser.routes import hospital_browser_bp
 app.register_blueprint(hospital_browser_bp, url_prefix='/api/hospital-browser')
@@ -232,4 +348,5 @@ if __name__ == '__main__':
     with app.app_context():
         _ensure_user_schema()
     debug_enabled = os.environ.get('LABELSYSTEM_DEBUG', '').lower() in {'1', 'true', 'yes'}
-    app.run(debug=debug_enabled, port=5000, use_reloader=False, threaded=True)
+    port = int(os.environ.get('LABELSYSTEM_PORT', '5000'))
+    app.run(debug=debug_enabled, port=port, use_reloader=False, threaded=True)

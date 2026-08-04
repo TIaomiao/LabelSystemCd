@@ -23,6 +23,7 @@ const LGEAnalysisView: React.FC<LGEAnalysisViewProps> = ({ dataset, caseId, revi
   const { t } = useLanguage();
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showEnhanced, setShowEnhanced] = useState(true);
   const [showAnnotationBoxes, setShowAnnotationBoxes] = useState(true);
@@ -45,16 +46,21 @@ const LGEAnalysisView: React.FC<LGEAnalysisViewProps> = ({ dataset, caseId, revi
 
   const fetchCaseDetail = async (ds: string, id: string) => {
     setLoading(true);
+    setLoadError('');
+    setCaseDetail(null);
     setFormData({});
     try {
       const reviewQuery = reviewUserId ? `?review_user_id=${reviewUserId}` : '';
       const res = await fetch(`/api/lge/cases/${ds}/${id}${reviewQuery}`);
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `LGE 分析加载失败（HTTP ${res.status}）`);
       setCaseDetail(data);
       if (data.assessment?.answers) setFormData(data.assessment.answers);
     } catch (err) {
       console.error('Failed to fetch case detail', err);
-      message.error('加载 LGE 分析失败');
+      const detail = err instanceof Error ? err.message : '加载 LGE 分析失败';
+      setLoadError(detail);
+      message.error(detail);
     } finally {
       setLoading(false);
     }
@@ -157,7 +163,7 @@ const LGEAnalysisView: React.FC<LGEAnalysisViewProps> = ({ dataset, caseId, revi
               <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 5, color: 'var(--accent-gold)' }}>增强视图</div>
               <BoxSegmentationViewer imageUrl={imageUrl} boxes={currentImageBoxes} interactive={false} showBoxes={showAnnotationBoxes} boxFillOpacity={0} />
             </div>}
-          </> : <div style={{ margin: 'auto', color: '#666' }}>无 LGE 影像数据</div>}
+          </> : <div style={{ margin: 'auto', color: loadError ? '#fca5a5' : '#666', padding: 24, textAlign: 'center' }}>{loadError || '无 LGE 影像数据'}</div>}
         </div>
       </div>
       <div style={{ width: rightSidebar.width, backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', position: 'relative', display: 'flex', flexDirection: 'column' }}>

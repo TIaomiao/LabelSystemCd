@@ -53,6 +53,11 @@ interface FeedbackIssue {
   title: string;
   category: string;
   status: string;
+  codex_investigation?: {
+    id: number;
+    status: 'pending' | 'running' | 'completed' | 'failed' | string;
+    error_message?: string;
+  } | null;
 }
 
 interface Props {
@@ -146,6 +151,17 @@ const FeedbackAssistantPanel: React.FC<Props> = ({ pageContext, onClose }) => {
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, sending]);
+
+  useEffect(() => {
+    const investigating = issues.some(issue => ['pending', 'running'].includes(issue.codex_investigation?.status || ''));
+    if (!activeSessionId || !investigating) return;
+    const timer = window.setInterval(() => {
+      void loadMessages(activeSessionId).catch(err => {
+        setError(err instanceof Error ? err.message : '刷新 Codex 调查状态失败');
+      });
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [activeSessionId, issues, loadMessages]);
 
   const switchSession = async (sessionId: number) => {
     await discardPendingAttachments();
@@ -313,8 +329,16 @@ const FeedbackAssistantPanel: React.FC<Props> = ({ pageContext, onClose }) => {
           </select>
         </label>
         <div className="feedback-assistant__reasoning" aria-label="思考深度">
-          <button className={reasoningLevel === 'medium' ? 'is-active' : ''} onClick={() => setReasoningLevel('medium')}>专家</button>
-          <button className={reasoningLevel === 'high' ? 'is-active' : ''} onClick={() => setReasoningLevel('high')}>超高</button>
+          <button
+            className={reasoningLevel === 'medium' ? 'is-active' : ''}
+            onClick={() => setReasoningLevel('medium')}
+            title="专家模型 · 中等思考深度"
+          >专家</button>
+          <button
+            className={reasoningLevel === 'high' ? 'is-active' : ''}
+            onClick={() => setReasoningLevel('high')}
+            title="GPT-5.6 SOL · 高思考深度"
+          >超高</button>
         </div>
       </div>
 
@@ -376,8 +400,15 @@ const FeedbackAssistantPanel: React.FC<Props> = ({ pageContext, onClose }) => {
       </div>
 
       {issues.length > 0 && (
-        <div className="feedback-assistant__issue" title={issues[0].title}>
-          <FaCheck /> 已沉淀问题单：{issues[0].title}
+        <div className={`feedback-assistant__issue is-${issues[0].codex_investigation?.status || 'saved'}`} title={issues[0].title}>
+          <FaCheck />
+          <span>
+            {issues[0].codex_investigation?.status === 'pending' && '问题单已保存 · Codex 仓库调查排队中'}
+            {issues[0].codex_investigation?.status === 'running' && 'Codex 正在读取工作站仓库并定位代码'}
+            {issues[0].codex_investigation?.status === 'completed' && 'Codex 仓库调查完成 · 已形成可追溯方案'}
+            {issues[0].codex_investigation?.status === 'failed' && '问题单已保存 · Codex 调查失败，负责人可重试'}
+            {!issues[0].codex_investigation && `已沉淀问题单：${issues[0].title}`}
+          </span>
         </div>
       )}
       {error && <div className="feedback-assistant__error">{error}</div>}

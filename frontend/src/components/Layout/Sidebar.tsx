@@ -36,7 +36,7 @@ const Sidebar: React.FC = () => {
     // { path: '/lge', name: t('sidebar.lge'), icon: <FaFileAlt /> },
     { path: '/experiment', name: t('sidebar.experiment'), icon: <FaChartBar /> },
     ...(showFeedbackDashboard ? [{ path: user?.is_admin ? '/admin/feedback' : '/feedback-dashboard', name: '反馈看板', icon: <FaChartBar /> }] : []),
-    ...(showAdmin ? [{ path: '/admin/assignments', name: '病例分配', icon: <FaDatabase /> }] : []),
+    ...(showAdmin ? [{ path: '/admin/assignments', name: '数据权限', icon: <FaDatabase /> }] : []),
     ...(showAdmin ? [{ path: '/admin/monitor', name: '系统监控', icon: <FaChartBar /> }] : []),
     ...(showAdmin ? [{ path: '/admin/llm-gateway', name: 'LLM 网关', icon: <FaBrain /> }] : []),
     ...(showAdmin ? [{ path: '/admin/users', name: '用户审核', icon: <FaUserMd /> }] : []),

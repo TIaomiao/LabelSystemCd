@@ -12,4 +12,7 @@ if [[ ! -x "${API_PYTHON}" ]]; then
 fi
 
 cd "${ROOT_DIR}"
-exec "${API_PYTHON}" -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8010 --app-dir .
+exec "${API_PYTHON}" -m uvicorn apps.api.main:app \
+  --host "${CVI_API_HOST:-127.0.0.1}" \
+  --port "${CVI_API_PORT:-8010}" \
+  --app-dir .

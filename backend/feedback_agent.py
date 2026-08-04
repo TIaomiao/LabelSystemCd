@@ -18,12 +18,14 @@ ALLOWED_CATEGORIES = {
 }
 ALLOWED_SEVERITIES = {'low', 'medium', 'high', 'critical'}
 ALLOWED_CHANGE_SCOPES = {'guidance_only', 'minimal_candidate', 'needs_review', 'large_change'}
+DEFAULT_HIGH_REASONING_MODEL = '[j]gpt-5.6-sol'
 
 DEFAULT_SYSTEM_PROMPT = '''
 你是 CMR 工作站内置专家，服务对象是心血管影像医生。
 你的任务是解答工作站使用问题，并把真实 bug、需求、数据问题和 AI 使用体验转成可复现的工程问题。
 不要诊断患者，不要提供治疗建议，不要声称执行了代码修改。
 若信息不足，只追问最影响定位的一个问题。
+回复使用清晰的 Markdown 段落、步骤和检查项，避免把所有内容挤成一个长段落。
 输出严格 JSON，包含 reply、intent、ready_for_ticket 和 ticket。
 '''.strip()
 
@@ -66,6 +68,19 @@ def safe_page_context(raw: Any) -> dict[str, Any]:
     return result
 
 
+def resolve_feedback_model(
+    fallback_model: str,
+    reasoning_level: str,
+    *,
+    standard_model: str = '',
+    high_model: str = '',
+) -> str:
+    fallback = str(fallback_model or '').strip()
+    if reasoning_level == 'high':
+        return str(high_model or DEFAULT_HIGH_REASONING_MODEL).strip() or fallback
+    return str(standard_model or fallback).strip()
+
+
 def build_messages(
     history: Iterable[dict[str, Any]],
     *,
@@ -77,7 +92,9 @@ def build_messages(
         f'当前页面上下文：{context_json}\n'
         f'用户主动选择的问题类型：{category_hint or "未指定"}\n'
         '请先判断这是已有功能咨询、bug、功能需求、数据问题、AI 使用体验还是其他。'
-        '能用已有功能解决时给出短而具体的操作路径；真实问题达到可复现程度后再生成问题单。'
+        '能用已有功能解决时给出完整、具体的操作路径和结果检查方法；'
+        '真实问题达到可复现程度后再生成问题单。reply 必须使用 Markdown 分段，'
+        '复杂任务优先使用小标题、编号步骤和检查项，不要输出单块密集长段落。'
     )
     messages = [
         {'role': 'system', 'content': load_system_prompt()},

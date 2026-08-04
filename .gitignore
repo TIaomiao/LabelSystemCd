@@ -26,6 +26,7 @@ frontend/node_modules/
 frontend/dist/
 dist/
 build/
+/apps/web/.vite-build/
 
 # runtime state
 logs/
@@ -35,6 +36,7 @@ zian_workspace/
 instance/
 backend/instance/
 .cvi-workspace/
+.labelsystem-demo/
 backend/recovered_structure.txt
 backend/*.recovered
 

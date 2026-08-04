@@ -5,7 +5,15 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SeriesRole = Literal["cine_sax", "cine_lax_4ch", "lge_sax", "lge_lax", "unknown"]
+SeriesRole = Literal[
+    "cine_sax",
+    "cine_lax_2ch",
+    "cine_lax_3ch",
+    "cine_lax_4ch",
+    "lge_sax",
+    "lge_lax",
+    "unknown",
+]
 ModuleName = Literal["function", "lge"]
 ReportStatus = Literal["草稿", "定稿"]
 
@@ -14,6 +22,25 @@ class Point2D(BaseModel):
     x: float
     y: float
     patient: Optional[List[float]] = None
+
+
+class CurvaturePoint2D(Point2D):
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+
+
+class CurvatureLandmarks(BaseModel):
+    slice_index: Optional[int] = Field(default=None, ge=0)
+    phase_index: Optional[int] = Field(default=None, ge=0)
+    j1: Optional[CurvaturePoint2D] = None
+    j2: Optional[CurvaturePoint2D] = None
+    m1: Optional[CurvaturePoint2D] = None
+    m2: Optional[CurvaturePoint2D] = None
+    method: Literal["manual_four_point"] = "manual_four_point"
+
+
+class CurvatureUpdateRequest(BaseModel):
+    landmarks: Optional[CurvatureLandmarks]
 
 
 class PolygonContour(BaseModel):
@@ -62,6 +89,7 @@ class ContourSet(BaseModel):
     annotation_meta: dict = Field(default_factory=dict)
     frame_meta: Dict[str, dict] = Field(default_factory=dict)
     phase_labels: PhaseLabels = Field(default_factory=PhaseLabels)
+    curvature_landmarks: Optional[CurvatureLandmarks] = None
     frames: Dict[str, FrameContour] = Field(default_factory=dict)
 
 
@@ -185,6 +213,27 @@ class JobStatus(BaseModel):
 class MeasurementRequest(BaseModel):
     series_id: int
     threshold_method: Optional[Literal["nsd", "fwhm"]] = None
+    sd_multiplier: float = 5.0
+    grey_zone: bool = False
+
+
+class CurvaturePreviewRequest(BaseModel):
+    series_id: int
+    landmarks: CurvatureLandmarks
+
+
+class FatThresholdPreviewRequest(BaseModel):
+    series_id: int
+    slice_index: int
+    phase_index: int
+    lower: float = 0.0
+    upper: float = 255.0
+
+
+class LgeThresholdPreviewRequest(BaseModel):
+    series_id: int
+    slice_index: int
+    threshold_method: Literal["nsd", "fwhm"] = "nsd"
     sd_multiplier: float = 5.0
     grey_zone: bool = False
 

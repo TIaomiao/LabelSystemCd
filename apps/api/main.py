@@ -10,10 +10,11 @@ from PIL import Image
 
 from .config import DEFAULT_SAMPLE_PATH, ensure_runtime_dirs
 from .db import init_db, loads
-from .models import ContourSet, DirectoryListing, ImportStudyRequest, InferJobRequest, JobStatus, MeasurementRequest, ModelFrameSegmentationRequest, NeighborPropagationRequest, PhaseDetectionResult, PromptSegmentationRequest, ReportDraft, ReportUpdateRequest, RoleUpdateRequest, StudyDetail
+from .models import ContourSet, CurvaturePreviewRequest, CurvatureUpdateRequest, DirectoryListing, FatThresholdPreviewRequest, ImportStudyRequest, InferJobRequest, JobStatus, LgeThresholdPreviewRequest, MeasurementRequest, ModelFrameSegmentationRequest, NeighborPropagationRequest, PhaseDetectionResult, PromptSegmentationRequest, ReportDraft, ReportUpdateRequest, RoleUpdateRequest, StudyDetail
+from .services.access_scope import job_study_scope, study_source_matches_roots
 from .services.dicom_indexer import fetch_study_detail, get_frame_row, get_series_row, import_study, list_directories, list_frame_rows, read_frame_pixels, repair_series_roles, update_series_role
-from .services.inference import create_job, fetch_contours, fetch_job, fetch_study_annotation_summaries, pause_job, run_job, save_contours
-from .services.measurements import compute_lv_tracking_preview, ensure_render, export_pdf, measurement_to_csv, recompute_function, recompute_lge
+from .services.inference import create_job, fetch_contours, fetch_job, fetch_study_annotation_summaries, pause_job, run_job, save_contours, save_curvature_landmarks
+from .services.measurements import compute_curvature_preview, compute_fat_threshold_preview, compute_lge_threshold_preview, compute_lv_tracking_preview, ensure_render, export_pdf, measurement_to_csv, recompute_function, recompute_lge
 from .services.model_frame_segmentation import apply_model_frame_segmentation
 from .services.gpu_monitor import get_gpu_status, gpu_monitor
 from .services.phase_detection import detect_function_phases
@@ -113,6 +114,25 @@ def get_study(study_id: int) -> dict:
     return detail
 
 
+@app.post("/internal/studies/{study_id}/source-membership")
+def internal_study_source_membership(study_id: int, payload: dict) -> dict:
+    roots = payload.get("roots") if isinstance(payload, dict) else None
+    if not isinstance(roots, list) or any(not isinstance(root, str) for root in roots):
+        raise HTTPException(status_code=400, detail="roots must be a list of paths.")
+    try:
+        return {"matches": study_source_matches_roots(study_id, roots)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Study not found.")
+
+
+@app.get("/internal/jobs/{job_id}/scope")
+def internal_job_scope(job_id: int) -> dict:
+    try:
+        return job_study_scope(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+
 @app.post("/series/{series_id}/role")
 def update_role(series_id: int, payload: RoleUpdateRequest) -> dict:
     try:
@@ -154,9 +174,45 @@ def get_contours(series_id: int, module: str = Query(..., pattern="^(function|lg
 
 
 @app.put("/contours/{series_id}", response_model=ContourSet)
-def put_contours(series_id: int, payload: ContourSet, request: Request) -> dict:
+def put_contours(
+    series_id: int,
+    payload: ContourSet,
+    request: Request,
+    recompute: bool = Query(True),
+) -> dict:
     try:
-        return save_contours(series_id, payload.module, payload.model_dump(), actor=_request_actor(request), action_origin="manual")
+        payload_data = payload.model_dump()
+        if "curvature_landmarks" not in payload.model_fields_set:
+            payload_data.pop("curvature_landmarks", None)
+        return save_contours(
+            series_id,
+            payload.module,
+            payload_data,
+            actor=_request_actor(request),
+            action_origin="manual",
+            recompute=recompute,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/contours/{series_id}/curvature", response_model=ContourSet)
+def patch_curvature_landmarks(
+    series_id: int,
+    payload: CurvatureUpdateRequest,
+    request: Request,
+    recompute: bool = Query(True),
+) -> dict:
+    try:
+        landmarks = payload.landmarks.model_dump() if payload.landmarks is not None else None
+        return save_curvature_landmarks(
+            series_id,
+            landmarks,
+            actor=_request_actor(request),
+            recompute=recompute,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Series not found.")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -251,6 +307,44 @@ def tracking_preview_endpoint(payload: MeasurementRequest) -> dict:
         return compute_lv_tracking_preview(payload.series_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Series not found.")
+
+
+@app.post("/measurements/curvature-preview")
+def curvature_preview_endpoint(payload: CurvaturePreviewRequest) -> dict:
+    try:
+        return compute_curvature_preview(payload.series_id, payload.landmarks.model_dump())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Series not found.")
+
+
+@app.post("/measurements/fat-threshold-preview")
+def fat_threshold_preview_endpoint(payload: FatThresholdPreviewRequest) -> dict:
+    try:
+        return compute_fat_threshold_preview(
+            payload.series_id,
+            payload.slice_index,
+            payload.phase_index,
+            payload.lower,
+            payload.upper,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Series or frame not found.")
+
+
+@app.post("/measurements/lge-threshold-preview")
+def lge_threshold_preview_endpoint(payload: LgeThresholdPreviewRequest) -> dict:
+    try:
+        return compute_lge_threshold_preview(
+            payload.series_id,
+            payload.slice_index,
+            payload.threshold_method,
+            payload.sd_multiplier,
+            payload.grey_zone,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Series or frame not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/series/{series_id}/detect-phases", response_model=PhaseDetectionResult)

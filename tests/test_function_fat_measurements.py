@@ -192,6 +192,91 @@ def test_function_fat_outer_prefers_ventricular_epi_over_epi(monkeypatch):
     assert result["metrics"]["epicardial_fat_exclude_volume_ml"] == round(float(expected_exclude.sum()) * 0.01, 4)
 
 
+def test_function_fat_threshold_filters_candidate_before_manual_exclude(monkeypatch):
+    series_id = 46
+    contours = {
+        "series_id": series_id,
+        "module": "function",
+        "settings": {
+            "fat_threshold": {
+                "enabled": True,
+                "frames": {"0:0": {"enabled": True, "lower": 100, "upper": 200}},
+            }
+        },
+        "phase_labels": {},
+        "frames": {
+            "0:0": {
+                "include": True,
+                "epi": _contour([(4, 4), (7, 4), (7, 7), (4, 7)]),
+                "fat_outer": _contour([(1, 1), (10, 1), (10, 10), (1, 10)]),
+                "exclude": _contour([(7, 7), (9, 7), (9, 9), (7, 9)]),
+            }
+        },
+    }
+    _install_measurement_fakes(monkeypatch, contours)
+    image = np.full((12, 12), 150, dtype=np.float32)
+    image[:, :4] = 60
+    image[:, 9:] = 230
+    monkeypatch.setattr(measurements, "read_frame_pixels", lambda _frame: image)
+
+    result = measurements.recompute_function(series_id)
+
+    masks = measurements._frame_masks(contours["frames"]["0:0"], 12, 12)
+    candidate = masks["fat_outer"] & ~masks["epi"]
+    intensity_keep = (image >= 100) & (image <= 200)
+    expected_threshold_exclude = candidate & ~intensity_keep
+    expected_manual_exclude = candidate & intensity_keep & masks["exclude"]
+    expected_fat = candidate & intensity_keep & ~masks["exclude"]
+    per_slice = result["per_slice"][0]
+
+    assert per_slice["fat_measurement_method"] == "fat_outer_minus_epi_intensity_range"
+    assert per_slice["fat_threshold_enabled"] is True
+    assert per_slice["fat_volume_ml"] == round(float(expected_fat.sum()) * 0.01, 2)
+    assert per_slice["fat_exclude_volume_ml"] == round(float(expected_manual_exclude.sum()) * 0.01, 2)
+    assert per_slice["fat_threshold_exclude_volume_ml"] == round(float(expected_threshold_exclude.sum()) * 0.01, 2)
+    assert per_slice["fat_candidate_volume_ml"] == round(float(candidate.sum()) * 0.01, 2)
+    assert result["metrics"]["epicardial_fat_threshold_applied_frame_count"] == 1
+    assert result["metrics"]["epicardial_fat_volume_ml"] == round(float(expected_fat.sum()) * 0.01, 4)
+    assert result["metrics"]["epicardial_fat_threshold_exclude_volume_ml"] == round(float(expected_threshold_exclude.sum()) * 0.01, 4)
+
+
+def test_fat_threshold_preview_is_non_persistent_and_returns_histogram_and_rle(monkeypatch):
+    series_id = 47
+    contours = {
+        "series_id": series_id,
+        "module": "function",
+        "settings": {},
+        "phase_labels": {},
+        "frames": {
+            "0:0": {
+                "include": True,
+                "epi": _contour([(4, 4), (7, 4), (7, 7), (4, 7)]),
+                "fat_outer": _contour([(1, 1), (10, 1), (10, 10), (1, 10)]),
+                "exclude": _contour([(7, 7), (9, 7), (9, 9), (7, 9)]),
+            }
+        },
+    }
+    _install_measurement_fakes(monkeypatch, contours)
+    image = np.full((12, 12), 150, dtype=np.float32)
+    image[:, :4] = 50
+    monkeypatch.setattr(measurements, "get_frame_row", lambda *_args: {"id": 1})
+    monkeypatch.setattr(measurements, "read_frame_pixels", lambda _frame: image)
+
+    result = measurements.compute_fat_threshold_preview(series_id, 0, 0, 100, 255)
+
+    stats = result["stats"]
+    assert result["range"] == {"lower": 100.0, "upper": 255.0}
+    assert len(result["histogram"]["counts"]) == 64
+    assert len(result["histogram"]["bin_edges"]) == 65
+    assert stats["candidate"]["pixel_count"] == (
+        stats["retained"]["pixel_count"]
+        + stats["threshold_excluded"]["pixel_count"]
+        + stats["manual_excluded"]["pixel_count"]
+    )
+    assert result["masks"]["retained"]["encoding"] == "row_major_runs"
+    assert result["masks"]["threshold_excluded"]["runs"]
+
+
 def test_function_sax_outputs_experimental_2d_gcs_and_grs_proxy(monkeypatch):
     series_id = 46
     contours = {
@@ -452,6 +537,12 @@ class FunctionFatMeasurementTests(unittest.TestCase):
 
     def test_function_fat_outer_prefers_ventricular_epi_over_epi(self):
         run_with_monkeypatch(self, test_function_fat_outer_prefers_ventricular_epi_over_epi)
+
+    def test_function_fat_threshold_filters_candidate_before_manual_exclude(self):
+        run_with_monkeypatch(self, test_function_fat_threshold_filters_candidate_before_manual_exclude)
+
+    def test_fat_threshold_preview_is_non_persistent_and_returns_histogram_and_rle(self):
+        run_with_monkeypatch(self, test_fat_threshold_preview_is_non_persistent_and_returns_histogram_and_rle)
 
     def test_function_sax_outputs_experimental_2d_gcs_and_grs_proxy(self):
         run_with_monkeypatch(self, test_function_sax_outputs_experimental_2d_gcs_and_grs_proxy)

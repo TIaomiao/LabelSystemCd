@@ -77,6 +77,30 @@ def test_manual_empty_frames_can_create_initial_empty_record(monkeypatch):
     assert recomputes == [(85, "function")]
 
 
+def test_contour_save_can_skip_measurement_recompute(monkeypatch):
+    payload = {
+        "series_id": 85,
+        "module": "function",
+        "coordinate_space": "pixel",
+        "source": "manual",
+        "settings": {},
+        "phase_labels": {},
+        "frames": {},
+    }
+    upserts = []
+    recomputes = []
+
+    monkeypatch.setattr(inference, "fetch_contours", lambda series_id, module: None)
+    monkeypatch.setattr(inference, "_upsert_contours", lambda *args: upserts.append(args))
+    monkeypatch.setattr(inference, "recompute_measurements_for_module", lambda *args: recomputes.append(args))
+
+    result = inference.save_contours(85, "function", payload, action_origin="manual", recompute=False)
+
+    assert result["frames"] == {}
+    assert len(upserts) == 1
+    assert recomputes == []
+
+
 def test_manual_empty_frames_can_explicitly_clear_existing_frames(monkeypatch):
     existing = {
         "series_id": 85,
@@ -614,12 +638,38 @@ def test_annotation_summary_ignores_empty_frames():
     assert summary["completed_modules"] == []
 
 
+def test_legacy_contour_save_preserves_existing_fat_threshold_settings():
+    threshold = {
+        "enabled": True,
+        "frames": {"0:9": {"enabled": True, "lower": 72, "upper": 255}},
+    }
+    existing = {"settings": {"fat_threshold": threshold}}
+    legacy_payload = {"settings": {}, "frames": {}}
+
+    result = inference._preserve_fat_threshold_settings(existing, legacy_payload)
+
+    assert result["settings"]["fat_threshold"] == threshold
+
+
+def test_legacy_contour_save_preserves_left_atrial_function_settings():
+    left_atrial = {"bsa_m2": 1.82}
+    existing = {"settings": {"left_atrial_function": left_atrial}}
+    legacy_payload = {"settings": {}, "frames": {}}
+
+    result = inference._preserve_fat_threshold_settings(existing, legacy_payload)
+
+    assert result["settings"]["left_atrial_function"] == left_atrial
+
+
 class ContourSaveGuardTests(unittest.TestCase):
     def test_manual_empty_frames_preserves_existing_frames_and_saves_metadata(self):
         run_with_monkeypatch(self, test_manual_empty_frames_preserves_existing_frames_and_saves_metadata)
 
     def test_manual_empty_frames_can_create_initial_empty_record(self):
         run_with_monkeypatch(self, test_manual_empty_frames_can_create_initial_empty_record)
+
+    def test_contour_save_can_skip_measurement_recompute(self):
+        run_with_monkeypatch(self, test_contour_save_can_skip_measurement_recompute)
 
     def test_manual_empty_frames_can_explicitly_clear_existing_frames(self):
         run_with_monkeypatch(self, test_manual_empty_frames_can_explicitly_clear_existing_frames)
@@ -665,3 +715,9 @@ class ContourSaveGuardTests(unittest.TestCase):
 
     def test_annotation_summary_ignores_empty_frames(self):
         test_annotation_summary_ignores_empty_frames()
+
+    def test_legacy_contour_save_preserves_existing_fat_threshold_settings(self):
+        test_legacy_contour_save_preserves_existing_fat_threshold_settings()
+
+    def test_legacy_contour_save_preserves_left_atrial_function_settings(self):
+        test_legacy_contour_save_preserves_left_atrial_function_settings()

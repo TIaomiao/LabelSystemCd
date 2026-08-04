@@ -376,6 +376,75 @@ const formatReportText = (text?: string | null) => {
     .trim();
 };
 
+const REPORT_HIGHLIGHT_GROUPS = [
+  {
+    key: 'metric',
+    label: '定量指标',
+    color: '#93c5fd',
+    background: 'rgba(59, 130, 246, 0.18)',
+    terms: ['LVEF', 'RVEF', 'LVEDV', 'LVESV', 'RVEDV', 'RVESV', 'EDV', 'ESV', 'GLS', 'GCS', 'GRS', 'EF', '心肌质量'],
+  },
+  {
+    key: 'abnormal',
+    label: '异常描述',
+    color: '#fca5a5',
+    background: 'rgba(239, 68, 68, 0.16)',
+    terms: ['异常', '增大', '扩大', '增厚', '减低', '降低', '升高', '强化', '梗死', '水肿', '纤维化', '狭窄', '反流'],
+  },
+  {
+    key: 'anatomy',
+    label: '解剖/序列',
+    color: '#86efac',
+    background: 'rgba(34, 197, 94, 0.15)',
+    terms: ['SAX', '4CH', '2CH', '3CH', 'LGE', '左心室', '右心室', '左心房', '右心房', '室间隔', '心包'],
+  },
+  {
+    key: 'conclusion',
+    label: '结论提示',
+    color: '#fde68a',
+    background: 'rgba(245, 158, 11, 0.16)',
+    terms: ['诊断', '结论', '提示', '考虑', '建议', '印象'],
+  },
+] as const;
+
+const REPORT_HIGHLIGHT_LOOKUP = new Map(
+  REPORT_HIGHLIGHT_GROUPS.flatMap(group => group.terms.map(term => [term.toLowerCase(), group] as const))
+);
+const REPORT_HIGHLIGHT_PATTERN = new RegExp(
+  `(${REPORT_HIGHLIGHT_GROUPS.flatMap(group => group.terms)
+    .sort((left, right) => right.length - left.length)
+    .map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')})`,
+  'gi'
+);
+
+const highlightReportText = (value: string): React.ReactNode => {
+  const parts = value.split(REPORT_HIGHLIGHT_PATTERN);
+  if (parts.length === 1) return value;
+  return parts.map((part, index) => {
+    const group = REPORT_HIGHLIGHT_LOOKUP.get(part.toLowerCase());
+    if (!group) return part;
+    return (
+      <mark
+        key={`${part}-${index}`}
+        title={group.label}
+        style={{
+          color: group.color,
+          background: group.background,
+          borderRadius: '3px',
+          padding: '0 2px',
+        }}
+      >
+        {part}
+      </mark>
+    );
+  });
+};
+
+const highlightReportChildren = (children: React.ReactNode) => (
+  React.Children.map(children, child => typeof child === 'string' ? highlightReportText(child) : child)
+);
+
 const reportMarkdownComponents = {
   h1: ({ children }: any) => (
     <h1 style={{ margin: '0 0 14px 0', fontSize: '24px', lineHeight: '1.3', color: '#f5f5f5', fontWeight: 700 }}>
@@ -396,7 +465,7 @@ const reportMarkdownComponents = {
   ),
   p: ({ children }: any) => (
     <p style={{ margin: '0 0 10px 0', color: 'var(--text-primary)', lineHeight: '1.72', whiteSpace: 'pre-wrap' }}>
-      {children}
+      {highlightReportChildren(children)}
     </p>
   ),
   ul: ({ children }: any) => (
@@ -411,12 +480,12 @@ const reportMarkdownComponents = {
   ),
   li: ({ children }: any) => (
     <li style={{ marginBottom: '7px', lineHeight: '1.68' }}>
-      {children}
+      {highlightReportChildren(children)}
     </li>
   ),
   strong: ({ children }: any) => (
     <strong style={{ color: '#f6df9a', fontWeight: 700 }}>
-      {children}
+      {highlightReportChildren(children)}
     </strong>
   )
 };
@@ -2502,6 +2571,24 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
                     <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
                         {t('eval.dataset')}: {caseDetail.dataset} | {t('eval.path')}: {caseDetail.id}
                     </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', color: 'var(--text-muted)', fontSize: '12px' }}>
+                    <span>关键词标记：</span>
+                    {REPORT_HIGHLIGHT_GROUPS.map(group => (
+                      <span
+                        key={group.key}
+                        style={{
+                          color: group.color,
+                          background: group.background,
+                          borderRadius: '999px',
+                          padding: '3px 9px',
+                        }}
+                      >
+                        {group.label}
+                      </span>
+                    ))}
+                    <span>仅改变显示，不修改报告原文。</span>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>

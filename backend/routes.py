@@ -24,11 +24,27 @@ import uuid
 import cv2
 import torch
 import httpx
+from sqlalchemy.exc import IntegrityError
 from openai import OpenAI
 from flask_login import login_user, logout_user, login_required, current_user
 from extensions import db
-from models import User, UserMessage, EvaluationResult, FunctionalAssessment, LGEAnalysis, ImageAnalysis, StructureAssessment, OtherFindings, SegmentationAnnotation, CardiacAnnotation, CviCaseCatalog, CaseAssignment, MediaAccessLog, FeedbackSession, FeedbackMessage, FeedbackAttachment, FeedbackIssue, FeedbackWorkPlan
-from feedback_agent import build_messages as build_feedback_agent_messages, derive_session_title, normalize_agent_result, redact_external_text, safe_page_context
+from models import User, UserMessage, EvaluationResult, FunctionalAssessment, LGEAnalysis, ImageAnalysis, StructureAssessment, OtherFindings, SegmentationAnnotation, CardiacAnnotation, CviCaseCatalog, CaseAssignment, DatasetAccessGrant, DatasetAccessAudit, MediaAccessLog, FeedbackSession, FeedbackMessage, FeedbackAttachment, FeedbackIssue, FeedbackWorkPlan, FeedbackCodexRun, FeedbackExecutionRun
+from feedback_agent import build_messages as build_feedback_agent_messages, derive_session_title, normalize_agent_result, redact_external_text, resolve_feedback_model, safe_page_context
+from codex_feedback_runner import (
+    CodexInvestigationError,
+    investigation_markdown,
+    investigation_to_proposal,
+    run_codex_investigation,
+)
+from codex_feedback_executor import (
+    CodexExecutionError,
+    CodexExecutionStopped,
+    merge_candidate,
+    request_stop as request_feedback_execution_stop,
+    run_controlled_execution,
+    validate_allowed_paths,
+    validate_clean_execution_base,
+)
 from utils_cardiac.report_parser import ReportParser
 
 # Helper for Excel Data Sources
@@ -63,17 +79,39 @@ MEDIA_TOKEN_COOKIE = 'ls_media_token'
 MEDIA_TOKEN_TTL_SECONDS = 20 * 60
 FUNCTIONAL_IMAGE_CACHE_MAX_ITEMS = int(os.environ.get('LABELSYSTEM_FUNCTIONAL_IMAGE_CACHE_ITEMS', '240'))
 BACKEND_DIR = Path(__file__).resolve().parent
+REPOSITORY_DIR = BACKEND_DIR.parent
 INSTANCE_DIR = BACKEND_DIR / 'instance'
+try:
+    DEFAULT_RELEASE_VERSION = (REPOSITORY_DIR / 'VERSION').read_text(encoding='utf-8').strip()
+except OSError:
+    DEFAULT_RELEASE_VERSION = 'development'
+LABELSYSTEM_RELEASE_VERSION = os.environ.get(
+    'LABELSYSTEM_RELEASE_VERSION',
+    DEFAULT_RELEASE_VERSION or 'development',
+).strip()
 LLM_GATEWAY_CONFIG_PATH = INSTANCE_DIR / 'llm_gateway_config.json'
 LLM_METRIC_CACHE_DIR = INSTANCE_DIR / 'llm_metric_cache'
 LLM_GATEWAY_MODEL_CACHE_PATH = INSTANCE_DIR / 'llm_gateway_models_cache.json'
 LLM_METRIC_SUGGESTION_CACHE_PATH = INSTANCE_DIR / 'llm_metric_suggestions_cache.json'
 FEEDBACK_ATTACHMENT_DIR = INSTANCE_DIR / 'feedback_attachments'
+FEEDBACK_CODEX_RUN_DIR = INSTANCE_DIR / 'feedback_codex_runs'
+FEEDBACK_EXECUTION_RUN_DIR = INSTANCE_DIR / 'feedback_execution_runs'
 FEEDBACK_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
 FEEDBACK_ATTACHMENT_MAX_DIMENSION = 2400
 EVAL_EXPORT_DIR = INSTANCE_DIR / 'eval_exports'
 eval_export_jobs_lock = Lock()
 eval_export_jobs = {}
+feedback_codex_execution_lock = Lock()
+admin_monitor_refresh_lock = Lock()
+dataset_access_update_lock = Lock()
+admin_monitor_cache = {'generated_monotonic': 0.0, 'payload': None}
+ADMIN_MONITOR_CACHE_TTL_SECONDS = max(1, int(os.environ.get('LABELSYSTEM_MONITOR_CACHE_SECONDS', '10')))
+
+
+def _invalidate_admin_monitor_cache():
+    with admin_monitor_refresh_lock:
+        admin_monitor_cache['generated_monotonic'] = 0.0
+        admin_monitor_cache['payload'] = None
 
 def get_excel_data(filename, header_row=None):
     cache_key = f'{filename}::header={0 if header_row is None else header_row}'
@@ -1941,6 +1979,61 @@ def _canonical_dataset(dataset: str | None) -> str:
     return dataset.replace('new_', '', 1) if dataset.startswith('new_') else dataset
 
 
+def _configured_assessment_roots() -> list[Path]:
+    roots: list[Path] = []
+    raw_roots = [
+        current_app.config.get('FUNCTIONAL_DATA_ROOT'),
+        current_app.config.get('DATA_ROOT'),
+        *[
+            item.get('path')
+            for item in current_app.config.get('CVI_LIBRARY_MULTICENTER_ROOTS', [])
+            if isinstance(item, dict)
+        ],
+    ]
+    for raw_root in raw_roots:
+        if not raw_root:
+            continue
+        root = Path(str(raw_root)).expanduser().resolve(strict=False)
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _path_is_within_roots(path: Path, roots: list[Path]) -> bool:
+    resolved = path.expanduser().resolve(strict=False)
+    return any(resolved == root or root in resolved.parents for root in roots)
+
+
+def _resolve_assessment_case_path(dataset: str, case_id: str) -> Path | None:
+    """Resolve the selected catalogue case without exposing arbitrary database paths."""
+    raw_case_id = str(case_id or '').strip()
+    if not raw_case_id or Path(raw_case_id).is_absolute() or '..' in Path(raw_case_id).parts:
+        return None
+
+    allowed_roots = _configured_assessment_roots()
+    catalog_rows = (
+        CviCaseCatalog.query
+        .filter(
+            CviCaseCatalog.dataset.in_(_dataset_aliases(dataset)),
+            CviCaseCatalog.case_id == raw_case_id,
+            CviCaseCatalog.source.in_(['functional', 'annotation']),
+        )
+        .order_by(CviCaseCatalog.updated_at.desc(), CviCaseCatalog.id.desc())
+        .all()
+    )
+    for row in catalog_rows:
+        candidate = Path(row.path).expanduser().resolve(strict=False)
+        if candidate.is_dir() and _path_is_within_roots(candidate, allowed_roots):
+            return candidate
+
+    functional_root = Path(str(current_app.config['FUNCTIONAL_DATA_ROOT'])).expanduser().resolve(strict=False)
+    for dataset_alias in _dataset_aliases(dataset):
+        candidate = (functional_root / dataset_alias / raw_case_id).resolve(strict=False)
+        if candidate.is_dir() and _path_is_within_roots(candidate, [functional_root]):
+            return candidate
+    return None
+
+
 def _latest_assessment_for_aliases(model_class, dataset: str, case_id: str, rater_id: int):
     return model_class.query.filter(
         model_class.case_id == case_id,
@@ -2470,6 +2563,368 @@ def _assignment_catalog_case_details(dataset):
     return details
 
 
+def _configured_dataset_access_definitions():
+    definitions = []
+    seen = set()
+    for item in current_app.config.get('CVI_LIBRARY_MULTICENTER_ROOTS', []) or []:
+        if not isinstance(item, dict):
+            continue
+        dataset = str(item.get('dataset') or '').strip()
+        if not dataset or dataset in seen:
+            continue
+        seen.add(dataset)
+        is_private = _config_flag_enabled(item.get('private_by_assignment'))
+        system_shared = dataset == 'CMR_ALL'
+        definitions.append({
+            'namespace': 'functional',
+            'dataset': dataset,
+            'label': str(item.get('label') or dataset).strip(),
+            'private_by_assignment': is_private,
+            'system_shared': system_shared,
+            'grant_supported': not system_shared,
+            'object_access_mode': 'assignment_required' if is_private else 'authenticated_shared',
+            'grant_effect': (
+                'already_shared'
+                if system_shared
+                else 'library_import_and_objects'
+                if is_private
+                else 'library_and_import'
+            ),
+        })
+    return definitions
+
+
+def _configured_dataset_access_definition(namespace, dataset):
+    namespace = str(namespace or '').strip()
+    dataset = str(dataset or '').strip()
+    if namespace != 'functional' or not dataset:
+        return None
+    return next(
+        (
+            item
+            for item in _configured_dataset_access_definitions()
+            if item['dataset'] == dataset
+        ),
+        None,
+    )
+
+
+def _normalize_dataset_access_user_ids(raw_user_ids):
+    if not isinstance(raw_user_ids, list):
+        raise ValueError('user_ids must be a list')
+    normalized = []
+    seen = set()
+    for raw_user_id in raw_user_ids:
+        if isinstance(raw_user_id, bool):
+            raise ValueError('Invalid user_id')
+        if isinstance(raw_user_id, int):
+            user_id = raw_user_id
+        elif isinstance(raw_user_id, str) and re.fullmatch(r'[1-9]\d*', raw_user_id.strip()):
+            user_id = int(raw_user_id)
+        else:
+            raise ValueError('Invalid user_id')
+        if user_id <= 0:
+            raise ValueError('Invalid user_id')
+        if user_id not in seen:
+            normalized.append(user_id)
+            seen.add(user_id)
+    return normalized
+
+
+def _replace_dataset_access_grants(namespace, dataset, raw_user_ids, created_by_id):
+    definition = _configured_dataset_access_definition(namespace, dataset)
+    if definition is None:
+        raise LookupError('数据集不存在或不支持整库权限')
+    if not definition.get('grant_supported', True):
+        raise ValueError('该数据集已经对所有已审核账号开放，不需要重复分配整库权限')
+
+    user_ids = _normalize_dataset_access_user_ids(raw_user_ids)
+    users = (
+        User.query
+        .filter(User.id.in_(user_ids))
+        .all()
+        if user_ids
+        else []
+    )
+    users_by_id = {int(user.id): user for user in users}
+    invalid_user_ids = [
+        user_id
+        for user_id in user_ids
+        if user_id not in users_by_id
+        or not users_by_id[user_id].is_approved
+        or users_by_id[user_id].is_admin
+    ]
+    if invalid_user_ids:
+        raise ValueError('整库权限只能分配给已审核的非管理员账号')
+
+    existing = DatasetAccessGrant.query.filter_by(
+        namespace=definition['namespace'],
+        dataset=definition['dataset'],
+    ).all()
+    existing_by_user_id = {int(item.user_id): item for item in existing}
+    selected = set(user_ids)
+    now = datetime.utcnow()
+
+    for user_id, grant in existing_by_user_id.items():
+        should_be_active = user_id in selected
+        if bool(grant.active) != should_be_active:
+            grant.active = should_be_active
+            grant.updated_at = now
+            grant.created_by_id = created_by_id
+
+    for user_id in user_ids:
+        if user_id in existing_by_user_id:
+            continue
+        db.session.add(DatasetAccessGrant(
+            namespace=definition['namespace'],
+            dataset=definition['dataset'],
+            user_id=user_id,
+            created_by_id=created_by_id,
+            created_at=now,
+            updated_at=now,
+            active=True,
+        ))
+    return user_ids
+
+
+def _active_dataset_access_user_ids(namespace, dataset):
+    return {
+        int(item.user_id)
+        for item in DatasetAccessGrant.query.filter_by(
+            namespace=str(namespace or '').strip(),
+            dataset=str(dataset or '').strip(),
+            active=True,
+        ).all()
+    }
+
+
+def _dataset_access_revision(namespace, dataset):
+    namespace = str(namespace or '').strip()
+    dataset = str(dataset or '').strip()
+    user_ids = sorted(_active_dataset_access_user_ids(namespace, dataset))
+    latest_audit_id = (
+        db.session.query(db.func.max(DatasetAccessAudit.id))
+        .filter_by(namespace=namespace, dataset=dataset)
+        .scalar()
+        or 0
+    )
+    revision_source = json.dumps(
+        {
+            'namespace': namespace,
+            'dataset': dataset,
+            'user_ids': user_ids,
+            'latest_audit_id': int(latest_audit_id),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+    return std_hashlib.sha256(revision_source.encode('utf-8')).hexdigest()[:24]
+
+
+def _append_dataset_access_audit(
+    namespace,
+    dataset,
+    *,
+    added_user_ids,
+    removed_user_ids,
+    actor,
+    request_ip='',
+):
+    added = sorted({int(user_id) for user_id in added_user_ids})
+    removed = sorted({int(user_id) for user_id in removed_user_ids})
+    changed_user_ids = sorted(set(added) | set(removed))
+    if not changed_user_ids:
+        return []
+
+    definition = _configured_dataset_access_definition(namespace, dataset)
+    if definition is None:
+        raise LookupError('数据集不存在或不支持整库权限')
+    users = User.query.filter(User.id.in_(changed_user_ids)).all()
+    users_by_id = {int(user.id): user for user in users}
+    batch_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    actor_id = int(getattr(actor, 'id', 0) or 0)
+    if actor_id <= 0 or not getattr(actor, 'is_admin', False):
+        raise ValueError('Administrator identity is required for dataset access audit')
+    actor_username = str(getattr(actor, 'username', '') or f'admin-{actor_id}')[:64]
+    ip_snapshot = str(request_ip or '')[:64]
+    dataset_label = str(definition.get('label') or definition['dataset'])[:200]
+    events = []
+
+    for action, user_ids in (('grant', added), ('revoke', removed)):
+        for user_id in user_ids:
+            user = users_by_id.get(user_id)
+            if user is not None:
+                target_username = str(user.username or f'user-{user_id}')[:64]
+            else:
+                previous = (
+                    DatasetAccessAudit.query
+                    .filter_by(
+                        namespace=definition['namespace'],
+                        dataset=definition['dataset'],
+                        target_user_id=user_id,
+                    )
+                    .order_by(DatasetAccessAudit.id.desc())
+                    .first()
+                )
+                target_username = (
+                    str(previous.target_username)[:64]
+                    if previous is not None and previous.target_username
+                    else f'已删除账号#{user_id}'
+                )
+            event = DatasetAccessAudit(
+                batch_id=batch_id,
+                namespace=definition['namespace'],
+                dataset=definition['dataset'],
+                dataset_label=dataset_label,
+                target_user_id=user_id,
+                target_username=target_username,
+                action=action,
+                actor_user_id=actor_id,
+                actor_username=actor_username,
+                request_ip=ip_snapshot,
+                release_version=LABELSYSTEM_RELEASE_VERSION[:64],
+                created_at=now,
+            )
+            db.session.add(event)
+            events.append(event)
+    return events
+
+
+def _dataset_access_overview():
+    definitions = _configured_dataset_access_definitions()
+    dataset_names = [item['dataset'] for item in definitions]
+    configured_keys = {(item['namespace'], item['dataset']) for item in definitions}
+    users = (
+        User.query
+        .filter_by(is_approved=True, is_admin=False)
+        .order_by(User.username.asc(), User.id.asc())
+        .all()
+    )
+
+    catalog_case_ids = {dataset: set() for dataset in dataset_names}
+    catalog_stats = {
+        dataset: {'catalog_count': 0, 'dicom_case_count': 0, 'imported_count': 0}
+        for dataset in dataset_names
+    }
+    if dataset_names:
+        catalog_rows = (
+            db.session.query(
+                CviCaseCatalog.dataset,
+                CviCaseCatalog.case_id,
+                CviCaseCatalog.has_dicom,
+                CviCaseCatalog.cvi_study_id,
+            )
+            .filter(
+                CviCaseCatalog.source == 'functional',
+                CviCaseCatalog.dataset.in_(dataset_names),
+            )
+            .all()
+        )
+        for row in catalog_rows:
+            dataset = str(row.dataset)
+            catalog_case_ids[dataset].add(str(row.case_id))
+            catalog_stats[dataset]['catalog_count'] += 1
+            catalog_stats[dataset]['dicom_case_count'] += int(bool(row.has_dicom))
+            catalog_stats[dataset]['imported_count'] += int(row.cvi_study_id is not None)
+
+    assignment_case_ids = {}
+    if dataset_names:
+        assignment_rows = (
+            db.session.query(
+                CaseAssignment.dataset,
+                CaseAssignment.user_id,
+                CaseAssignment.case_id,
+            )
+            .filter(
+                CaseAssignment.namespace == 'functional',
+                CaseAssignment.dataset.in_(dataset_names),
+                CaseAssignment.active.is_(True),
+            )
+            .all()
+        )
+        for row in assignment_rows:
+            assignment_case_ids.setdefault(
+                (str(row.dataset), int(row.user_id)),
+                set(),
+            ).add(str(row.case_id))
+
+    active_grants = DatasetAccessGrant.query.filter_by(active=True).all()
+    active_grant_keys = {
+        (str(item.namespace), str(item.dataset), int(item.user_id))
+        for item in active_grants
+    }
+    orphan_grants = sum(
+        1
+        for item in active_grants
+        if (str(item.namespace), str(item.dataset)) not in configured_keys
+    )
+
+    datasets = []
+    for definition in definitions:
+        dataset = definition['dataset']
+        current_case_ids = catalog_case_ids[dataset]
+        catalog_count = catalog_stats[dataset]['catalog_count']
+        user_access = []
+        for user in users:
+            assigned_ids = assignment_case_ids.get((dataset, int(user.id)), set())
+            current_assignments = assigned_ids & current_case_ids
+            stale_assignments = assigned_ids - current_case_ids
+            has_dataset_grant = (
+                definition['namespace'],
+                dataset,
+                int(user.id),
+            ) in active_grant_keys
+            if definition.get('system_shared'):
+                access_scope = 'system_shared'
+            elif has_dataset_grant:
+                access_scope = 'dataset'
+            elif catalog_count > 0 and len(current_assignments) == catalog_count:
+                access_scope = 'all_current'
+            elif current_assignments:
+                access_scope = 'partial'
+            else:
+                access_scope = 'none'
+            user_access.append({
+                'user_id': int(user.id),
+                'username': user.username,
+                'has_dataset_grant': has_dataset_grant,
+                'case_assignment_count': len(current_assignments),
+                'stale_case_assignment_count': len(stale_assignments),
+                'effective_case_count': (
+                    catalog_count
+                    if has_dataset_grant or definition.get('system_shared')
+                    else len(current_assignments)
+                ),
+                'access_scope': access_scope,
+                'future_cases_included': bool(has_dataset_grant or definition.get('system_shared')),
+            })
+        datasets.append({
+            **definition,
+            **catalog_stats[dataset],
+            'revision': _dataset_access_revision(definition['namespace'], dataset),
+            'dataset_grant_count': sum(1 for item in user_access if item['has_dataset_grant']),
+            'user_access': user_access,
+        })
+
+    recent_audits = (
+        DatasetAccessAudit.query
+        .order_by(DatasetAccessAudit.created_at.desc(), DatasetAccessAudit.id.desc())
+        .limit(100)
+        .all()
+    )
+    return {
+        'datasets': datasets,
+        'users': [user.to_admin_dict() for user in users],
+        'admin_access_inherited': User.query.filter_by(is_approved=True, is_admin=True).count(),
+        'orphan_active_grants': orphan_grants,
+        'release_version': LABELSYSTEM_RELEASE_VERSION,
+        'audit_total': DatasetAccessAudit.query.count(),
+        'recent_audit': [item.to_dict() for item in recent_audits],
+    }
+
+
 def _assignment_dataset_library_presets():
     presets = []
     for item in current_app.config.get('CVI_LIBRARY_MULTICENTER_ROOTS', []) or []:
@@ -2828,6 +3283,57 @@ def _case_has_assignments(namespace: str, dataset: str, case_id: str) -> bool:
     return query.first() is not None
 
 
+def _config_flag_enabled(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _base_dicom_dataset_name(dataset: str | None) -> str:
+    raw = _canonical_dataset(dataset)
+    if raw.startswith('SOLO_CMR_ALL_'):
+        return 'CMR_ALL'
+    if raw.startswith('SOLO_CMR_Chendu_'):
+        return 'CMR_Chendu'
+    if raw.startswith('SOLO_CMR_SCS_'):
+        return 'CMR_SCS'
+    if raw.startswith('SOLO_CMR_YA_'):
+        return 'CMR_YA'
+    return raw
+
+
+def _dataset_is_private_by_assignment(namespace: str, dataset: str) -> bool:
+    if str(namespace or '').strip().lower() != 'functional':
+        return False
+    target = _base_dicom_dataset_name(dataset)
+    if not target:
+        return False
+    for item in current_app.config.get('CVI_LIBRARY_MULTICENTER_ROOTS', []):
+        if not isinstance(item, dict):
+            continue
+        configured_dataset = _base_dicom_dataset_name(item.get('dataset'))
+        if configured_dataset == target and _config_flag_enabled(item.get('private_by_assignment')):
+            return True
+    return False
+
+
+def _user_has_dataset_access_grant(namespace: str, dataset: str, user_id: int | None = None) -> bool:
+    definition = _configured_dataset_access_definition(namespace, dataset)
+    if definition is None or not definition.get('grant_supported', True):
+        return False
+    target_user_id = user_id if user_id is not None else getattr(current_user, 'id', None)
+    if not target_user_id:
+        return False
+    return DatasetAccessGrant.query.filter_by(
+        namespace=str(namespace or '').strip(),
+        dataset=str(dataset or '').strip(),
+        user_id=int(target_user_id),
+        active=True,
+    ).first() is not None
+
+
 def _normalized_case_id(case_id: str) -> str:
     return Path(str(case_id or '')).name
 
@@ -2854,6 +3360,19 @@ def _user_can_access_case(namespace: str, dataset: str, case_id: str) -> bool:
     if getattr(current_user, 'is_admin', False):
         return True
     dataset = dataset or ''
+    if _user_has_dataset_access_grant(namespace, dataset):
+        return True
+    raw_case_id = str(case_id or '').strip()
+    if _dataset_is_private_by_assignment(namespace, dataset):
+        if not raw_case_id:
+            return False
+        return CaseAssignment.query.filter_by(
+            namespace=namespace,
+            dataset=dataset,
+            case_id=raw_case_id,
+            user_id=current_user.id,
+            active=True,
+        ).first() is not None
     case_name = _normalized_case_id(case_id)
     base_dataset = dataset.replace('new_', '', 1) if dataset.startswith('new_') else dataset
     if namespace == 'functional' and base_dataset == 'CMR_ALL' and case_name in _configured_report_set_case_names(base_dataset):
@@ -2866,7 +3385,7 @@ def _user_can_access_case(namespace: str, dataset: str, case_id: str) -> bool:
         user_id=current_user.id,
         active=True,
     ).filter(db.or_(
-        CaseAssignment.case_id == str(case_id or '').strip(),
+        CaseAssignment.case_id == raw_case_id,
         CaseAssignment.case_id == case_name,
         CaseAssignment.case_id.like(f'%/{case_name}'),
     )).first() is not None
@@ -2897,7 +3416,12 @@ def _guard_media_access(kind: str = 'image', *, namespace: str = '', dataset: st
     return None
 
 
-def _secure_media_response(response: Response, *, inline_filename: str | None = None) -> Response:
+def _secure_media_response(
+    response: Response,
+    *,
+    inline_filename: str | None = None,
+    viewer_user_id: int | None = None,
+) -> Response:
     response.headers['Cache-Control'] = 'no-store, private, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -2905,10 +3429,12 @@ def _secure_media_response(response: Response, *, inline_filename: str | None = 
     response.headers['Accept-Ranges'] = 'none'
     if inline_filename:
         response.headers['Content-Disposition'] = f'inline; filename="{secure_filename(inline_filename) or "image"}"'
-    if current_user.is_authenticated:
+    if viewer_user_id is None and current_user.is_authenticated:
+        viewer_user_id = int(current_user.id)
+    if viewer_user_id is not None:
         response.set_cookie(
             MEDIA_TOKEN_COOKIE,
-            _build_media_token(current_user.id),
+            _build_media_token(viewer_user_id),
             max_age=MEDIA_TOKEN_TTL_SECONDS,
             httponly=True,
             secure=current_app.config.get('SESSION_COOKIE_SECURE', False),
@@ -2918,8 +3444,10 @@ def _secure_media_response(response: Response, *, inline_filename: str | None = 
     return response
 
 
-def _watermark_text() -> str:
-    username = current_user.username if current_user.is_authenticated else 'viewer'
+def _watermark_text(username: str | None = None) -> str:
+    if username is None:
+        username = current_user.username if current_user.is_authenticated else 'viewer'
+    username = str(username or 'viewer')
     return f"{username} {datetime.utcnow().strftime('%Y-%m-%d %H:%MZ')}"
 
 
@@ -2958,12 +3486,22 @@ def _add_edge_watermark(img: Image.Image, text: str | None = None) -> Image.Imag
     return marked.convert(img.mode if img.mode in {'L', 'RGB'} else 'RGB')
 
 
-def _watermarked_png_response(img: Image.Image, filename: str = 'viewer-image.png') -> Response:
-    marked = _add_edge_watermark(img)
+def _watermarked_png_response(
+    img: Image.Image,
+    filename: str = 'viewer-image.png',
+    *,
+    watermark_text: str | None = None,
+    viewer_user_id: int | None = None,
+) -> Response:
+    marked = _add_edge_watermark(img, watermark_text)
     img_io = io.BytesIO()
     marked.save(img_io, 'PNG')
     img_io.seek(0)
-    return _secure_media_response(send_file(img_io, mimetype='image/png'), inline_filename=filename)
+    return _secure_media_response(
+        send_file(img_io, mimetype='image/png'),
+        inline_filename=filename,
+        viewer_user_id=viewer_user_id,
+    )
 
 
 def _watermarked_png_bytes(img: Image.Image) -> bytes:
@@ -2978,12 +3516,27 @@ def _cached_png_response(body: bytes, filename: str = 'viewer-image.png') -> Res
     return _secure_media_response(response, inline_filename=filename)
 
 
-def _watermarked_file_response(file_path: str, filename: str | None = None) -> Response:
+def _watermarked_file_response(
+    file_path: str,
+    filename: str | None = None,
+    *,
+    watermark_text: str | None = None,
+    viewer_user_id: int | None = None,
+) -> Response:
     try:
         with Image.open(file_path) as img:
-            return _watermarked_png_response(img.convert('RGB'), filename or os.path.basename(file_path) or 'viewer-image.png')
+            return _watermarked_png_response(
+                img.convert('RGB'),
+                filename or os.path.basename(file_path) or 'viewer-image.png',
+                watermark_text=watermark_text,
+                viewer_user_id=viewer_user_id,
+            )
     except Exception:
-        return _secure_media_response(send_file(file_path), inline_filename=filename or os.path.basename(file_path))
+        return _secure_media_response(
+            send_file(file_path),
+            inline_filename=filename or os.path.basename(file_path),
+            viewer_user_id=viewer_user_id,
+        )
 
 
 def _resolve_under(root: str, *parts: str) -> str:
@@ -3517,6 +4070,8 @@ def _security_overview():
     return {
         'assignments_total': CaseAssignment.query.filter_by(active=True).count(),
         'assignments_by_namespace': assignment_counts,
+        'dataset_grants_total': DatasetAccessGrant.query.filter_by(active=True).count(),
+        'dataset_access_audits_total': DatasetAccessAudit.query.count(),
         'media_logs_total': MediaAccessLog.query.count(),
         'media_status_counts': status_counts,
         'recent_media_logs': [item.to_dict() for item in recent_logs],
@@ -3542,7 +4097,12 @@ def _run_feedback_agent(history, page_context, category_hint, reasoning_level, a
         raise RuntimeError('AI 服务当前未启用')
     client = _llm_gateway_client(config)
     fallback_model = str(config.get('model') or DEFAULT_LLM_GATEWAY_CONFIG['model']).strip()
-    preferred_model = str(os.environ.get('LABELSYSTEM_FEEDBACK_MODEL') or fallback_model).strip()
+    preferred_model = resolve_feedback_model(
+        fallback_model,
+        reasoning_level,
+        standard_model=os.environ.get('LABELSYSTEM_FEEDBACK_MODEL', ''),
+        high_model=os.environ.get('LABELSYSTEM_FEEDBACK_HIGH_MODEL', ''),
+    )
     messages = build_feedback_agent_messages(
         history,
         page_context=page_context,
@@ -3571,18 +4131,22 @@ def _run_feedback_agent(history, page_context, category_hint, reasoning_level, a
                     ]
                     break
     started = time.time()
-    attempts = [(preferred_model, True)]
-    if fallback_model and fallback_model != preferred_model:
-        attempts.append((fallback_model, False))
-    else:
-        attempts.append((preferred_model, False))
+    attempts = []
+    for attempt in (
+        (preferred_model, True),
+        (fallback_model, True),
+        (fallback_model, False),
+    ):
+        if attempt[0] and attempt not in attempts:
+            attempts.append(attempt)
+    minimum_response_tokens = 3200 if reasoning_level == 'high' else 2400
     last_error = None
     for model_name, use_reasoning_contract in attempts:
         try:
             request_payload = {
                 'model': model_name,
                 'messages': messages,
-                'max_tokens': max(int(config.get('max_tokens') or 1200), 1600),
+                'max_tokens': max(int(config.get('max_tokens') or 1200), minimum_response_tokens),
             }
             if use_reasoning_contract:
                 request_payload.update({
@@ -3672,13 +4236,50 @@ def _normalize_feedback_work_plan(raw_text, issue):
             f'验收标准：{issue.acceptance_criteria}\n'
             '先只读定位调用链，给出最小改动方案、风险和验证结果；未经批准不要修改数据、标注、数据库或服务。'
         )
+    repository_evidence = []
+    for item in parsed.get('repository_evidence') if isinstance(parsed.get('repository_evidence'), list) else []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get('path') or '').strip().lstrip('/')
+        try:
+            line_start = max(1, int(item.get('line_start') or 1))
+            line_end = max(line_start, int(item.get('line_end') or line_start))
+        except (TypeError, ValueError):
+            continue
+        if path and '..' not in Path(path).parts:
+            repository_evidence.append({
+                'path': path[:1000],
+                'line_start': line_start,
+                'line_end': line_end,
+                'reason': str(item.get('reason') or '').strip()[:4000],
+            })
+    confidence = text('confidence', 'low')
+    if confidence not in {'high', 'medium', 'low'}:
+        confidence = 'low'
+    reproducibility = text('reproducibility', 'production_data_required')
+    if reproducibility not in {'code_only', 'demo_cases', 'production_data_required'}:
+        reproducibility = 'production_data_required'
     return {
         'solution_summary': text('solution_summary', '需人工补充解决方案。'),
         'implementation_steps': text_list('implementation_steps'),
+        'allowed_paths': [
+            str(item).strip()[:1000]
+            for item in parsed.get('allowed_paths') if isinstance(parsed.get('allowed_paths'), list)
+            if str(item).strip() and '..' not in Path(str(item).strip()).parts
+        ][:80],
         'risks': risks,
         'verification_steps': text_list('verification_steps'),
         'execution_scope': scope,
         'codex_brief': codex_brief,
+        'repository_evidence': repository_evidence,
+        'confidence': confidence,
+        'clarifying_question': text('clarifying_question'),
+        'base_sha': text('base_sha')[:64],
+        'branch': text('branch')[:160],
+        'dirty_worktree': bool(parsed.get('dirty_worktree')),
+        'prompt_hash': text('prompt_hash')[:64],
+        'reproducibility': reproducibility,
+        'data_requirements': text('data_requirements'),
     }
 
 
@@ -3732,25 +4333,452 @@ def _generate_feedback_work_plan(issue, revision_note=''):
     return result
 
 
+def _feedback_issue_codex_payload(issue):
+    return {
+        'id': issue.id,
+        'session_id': issue.session_id,
+        'category': issue.category,
+        'title': issue.title,
+        'summary': issue.summary,
+        'page': issue.page,
+        'operation': issue.operation,
+        'expected_behavior': issue.expected_behavior,
+        'actual_behavior': issue.actual_behavior,
+        'impact': issue.impact,
+        'severity': issue.severity,
+        'acceptance_criteria': issue.acceptance_criteria,
+        'change_scope': issue.change_scope,
+    }
+
+
+def _feedback_codex_source_message(issue):
+    source = issue.source_message
+    if source is not None and source.role == 'user':
+        return source
+    query = FeedbackMessage.query.filter_by(session_id=issue.session_id, role='user')
+    if source is not None and source.created_at is not None:
+        query = query.filter(FeedbackMessage.created_at <= source.created_at)
+    return query.order_by(FeedbackMessage.created_at.desc(), FeedbackMessage.id.desc()).first()
+
+
+def _feedback_codex_conversation(issue):
+    records = (
+        FeedbackMessage.query
+        .filter_by(session_id=issue.session_id)
+        .order_by(FeedbackMessage.created_at.desc(), FeedbackMessage.id.desc())
+        .limit(24)
+        .all()
+    )
+    records.reverse()
+    return [
+        {
+            'message_id': item.id,
+            'role': item.role,
+            'content': item.content,
+            'created_at': item.created_at.isoformat() if item.created_at else None,
+        }
+        for item in records
+    ]
+
+
+def _latest_feedback_codex_run(issue_id):
+    return (
+        FeedbackCodexRun.query
+        .filter_by(issue_id=issue_id, phase='investigation')
+        .order_by(FeedbackCodexRun.id.desc())
+        .first()
+    )
+
+
+def _queue_feedback_codex_investigation(issue, initiated_by_id, revision_note=''):
+    active = (
+        FeedbackCodexRun.query
+        .filter(
+            FeedbackCodexRun.issue_id == issue.id,
+            FeedbackCodexRun.phase == 'investigation',
+            FeedbackCodexRun.status.in_(['pending', 'running']),
+        )
+        .order_by(FeedbackCodexRun.id.desc())
+        .first()
+    )
+    if active is not None:
+        return active, False
+    run = FeedbackCodexRun(
+        issue_id=issue.id,
+        initiated_by_id=initiated_by_id,
+        status='pending',
+        phase='investigation',
+        revision_note=str(revision_note or '').strip()[:4000],
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.session.add(run)
+    db.session.commit()
+    app = current_app._get_current_object()
+    Thread(
+        target=_execute_feedback_codex_investigation,
+        args=(app, run.id),
+        daemon=True,
+        name=f'feedback-codex-{run.id}',
+    ).start()
+    return run, True
+
+
+def _execute_feedback_codex_investigation(app, run_id):
+    with feedback_codex_execution_lock:
+        with app.app_context():
+            run = FeedbackCodexRun.query.get(run_id)
+            if run is None or run.status != 'pending':
+                return
+            issue = FeedbackIssue.query.get(run.issue_id)
+            if issue is None:
+                run.status = 'failed'
+                run.error_message = '问题单不存在'
+                run.finished_at = datetime.utcnow()
+                run.updated_at = run.finished_at
+                db.session.commit()
+                return
+            run.status = 'running'
+            run.started_at = datetime.utcnow()
+            run.updated_at = run.started_at
+            db.session.commit()
+
+            source_message = _feedback_codex_source_message(issue)
+            attachment_paths = [
+                item.storage_path
+                for item in (source_message.attachments if source_message is not None else [])
+            ]
+            artifact_dir = FEEDBACK_CODEX_RUN_DIR / str(run.id)
+            run.artifact_dir = str(artifact_dir)
+            db.session.commit()
+            try:
+                result, metadata = run_codex_investigation(
+                    _feedback_issue_codex_payload(issue),
+                    _feedback_codex_conversation(issue),
+                    revision_note=run.revision_note,
+                    attachment_paths=attachment_paths,
+                    run_dir=artifact_dir,
+                )
+            except Exception as exc:
+                safe_error = str(exc) if isinstance(exc, CodexInvestigationError) else f'{type(exc).__name__}: {exc}'
+                current_app.logger.exception('Feedback Codex investigation failed for run %s', run.id)
+                run.status = 'failed'
+                run.error_message = safe_error[:12000]
+                run.finished_at = datetime.utcnow()
+                run.updated_at = run.finished_at
+                failure_message = FeedbackMessage(
+                    session_id=issue.session_id,
+                    author_id=None,
+                    role='assistant',
+                    content=(
+                        '## Codex 仓库调查未完成\n\n'
+                        f'{safe_error}\n\n'
+                        '问题单已经保留，负责人可以在反馈看板中重新发起仓库调查。'
+                    ),
+                    reasoning_level='high',
+                    page_context=source_message.page_context if source_message is not None else {},
+                    model_name='codex-repository-investigator',
+                    created_at=datetime.utcnow(),
+                )
+                db.session.add(failure_message)
+                issue.session.last_message_at = failure_message.created_at
+                issue.session.updated_at = failure_message.created_at
+                db.session.commit()
+                return
+
+            proposal = investigation_to_proposal(result, metadata, _feedback_issue_codex_payload(issue))
+            plan = FeedbackWorkPlan.query.filter_by(issue_id=issue.id).first()
+            if plan is None:
+                plan = FeedbackWorkPlan(issue_id=issue.id, created_at=datetime.utcnow())
+                db.session.add(plan)
+            if plan.status not in {'queued', 'verified'}:
+                plan.proposal_json = proposal
+                plan.status = 'draft'
+                plan.generated_by_id = run.initiated_by_id
+                plan.approved_by_id = None
+                plan.approved_at = None
+                plan.queue_note = ''
+                plan.execution_note = ''
+                plan.updated_at = datetime.utcnow()
+                issue.status = 'reviewing'
+                issue.updated_at = plan.updated_at
+
+            completion_message = FeedbackMessage(
+                session_id=issue.session_id,
+                author_id=None,
+                role='assistant',
+                content=investigation_markdown(result, metadata),
+                reasoning_level='high',
+                page_context=source_message.page_context if source_message is not None else {},
+                model_name=f"codex-repository-investigator:{metadata.get('model', '')}"[:120],
+                created_at=datetime.utcnow(),
+            )
+            db.session.add(completion_message)
+            issue.session.last_message_at = completion_message.created_at
+            issue.session.updated_at = completion_message.created_at
+            run.status = 'completed'
+            run.base_sha = str(metadata.get('base_sha') or '')[:64]
+            run.branch = str(metadata.get('branch') or '')[:160]
+            run.dirty_worktree = bool(metadata.get('dirty'))
+            run.model_name = str(metadata.get('model') or '')[:120]
+            run.prompt_hash = str(metadata.get('prompt_hash') or '')[:64]
+            run.result_json = result
+            run.error_message = ''
+            run.finished_at = datetime.utcnow()
+            run.updated_at = run.finished_at
+            db.session.commit()
+
+
+def _latest_feedback_execution(issue_id):
+    return (
+        FeedbackExecutionRun.query
+        .filter_by(issue_id=issue_id)
+        .order_by(FeedbackExecutionRun.id.desc())
+        .first()
+    )
+
+
+def _feedback_execution_issue_snapshot(issue):
+    return {
+        'id': issue.id,
+        'category': issue.category,
+        'title': issue.title,
+        'summary': issue.summary,
+        'page': issue.page,
+        'operation': issue.operation,
+        'expected_behavior': issue.expected_behavior,
+        'actual_behavior': issue.actual_behavior,
+        'impact': issue.impact,
+        'severity': issue.severity,
+        'acceptance_criteria': issue.acceptance_criteria,
+        'change_scope': issue.change_scope,
+    }
+
+
+def _feedback_plan_hash(snapshot):
+    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return std_hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _execution_to_dict(run):
+    if run is None:
+        return None
+    return run.to_dict(include_paths=bool(getattr(current_user, 'is_admin', False)))
+
+
+def _queue_feedback_execution(issue, plan, initiated_by_id):
+    active = (
+        FeedbackExecutionRun.query
+        .filter(
+            FeedbackExecutionRun.work_plan_id == plan.id,
+            FeedbackExecutionRun.status.in_([
+                'queued', 'preparing', 'running', 'stopping', 'review_ready',
+                'review_approved', 'merging',
+            ]),
+        )
+        .order_by(FeedbackExecutionRun.id.desc())
+        .first()
+    )
+    if active is not None:
+        return active, False
+    proposal = plan.proposal_json if isinstance(plan.proposal_json, dict) else {}
+    if bool(proposal.get('dirty_worktree')):
+        raise CodexExecutionError('该方案调查时仓库含未提交改动，不能作为受控执行基线；请先固化代码并重新调查')
+    if not isinstance(proposal.get('allowed_paths'), list) or not proposal.get('allowed_paths'):
+        raise CodexExecutionError('该方案没有冻结允许修改的文件范围，请重新调查仓库后再批准')
+    proposal = {**proposal, 'allowed_paths': validate_allowed_paths(proposal['allowed_paths'])}
+    base_sha = validate_clean_execution_base(str(proposal.get('base_sha') or ''))
+    snapshot = {
+        'issue': _feedback_execution_issue_snapshot(issue),
+        'proposal': proposal,
+        'base_sha': base_sha,
+        'approved_by_id': plan.approved_by_id,
+        'approved_at': plan.approved_at.isoformat() if plan.approved_at else None,
+    }
+    previous = (
+        FeedbackExecutionRun.query
+        .filter_by(work_plan_id=plan.id, status='review_rejected')
+        .order_by(FeedbackExecutionRun.id.desc())
+        .first()
+    )
+    if previous is not None and previous.review_note:
+        snapshot['previous_rejection_note'] = previous.review_note
+    run = FeedbackExecutionRun(
+        issue_id=issue.id,
+        work_plan_id=plan.id,
+        attempt=(
+            db.session.query(db.func.coalesce(db.func.max(FeedbackExecutionRun.attempt), 0))
+            .filter(FeedbackExecutionRun.work_plan_id == plan.id)
+            .scalar()
+            + 1
+        ),
+        initiated_by_id=initiated_by_id,
+        status='queued',
+        phase='queued',
+        base_sha=base_sha,
+        target_branch=str(proposal.get('branch') or 'main')[:160],
+        plan_snapshot_json=snapshot,
+        plan_hash=_feedback_plan_hash(snapshot),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.session.add(run)
+    plan.status = 'queued'
+    plan.queue_note = '已进入受控 Codex 执行队列；将在独立 Git worktree 中产生候选改动。'
+    plan.updated_at = datetime.utcnow()
+    db.session.commit()
+    app = current_app._get_current_object()
+    Thread(
+        target=_execute_feedback_code_change,
+        args=(app, run.id),
+        daemon=True,
+        name=f'feedback-execution-{run.id}',
+    ).start()
+    return run, True
+
+
+def _execute_feedback_code_change(app, run_id):
+    with app.app_context():
+        claimed = (
+            FeedbackExecutionRun.query
+            .filter_by(id=run_id, status='queued')
+            .update({
+                FeedbackExecutionRun.status: 'preparing',
+                FeedbackExecutionRun.phase: 'claiming',
+                FeedbackExecutionRun.started_at: datetime.utcnow(),
+                FeedbackExecutionRun.updated_at: datetime.utcnow(),
+                FeedbackExecutionRun.version: FeedbackExecutionRun.version + 1,
+            })
+        )
+        db.session.commit()
+        if claimed != 1:
+            return
+        run = FeedbackExecutionRun.query.get(run_id)
+        if run is None:
+            return
+        snapshot = run.plan_snapshot_json if isinstance(run.plan_snapshot_json, dict) else {}
+        issue_snapshot = snapshot.get('issue') if isinstance(snapshot.get('issue'), dict) else {}
+        proposal = snapshot.get('proposal') if isinstance(snapshot.get('proposal'), dict) else {}
+        if snapshot.get('previous_rejection_note'):
+            proposal = {
+                **proposal,
+                'previous_execution_rejection': str(snapshot.get('previous_rejection_note'))[:12000],
+            }
+        artifact_dir = FEEDBACK_EXECUTION_RUN_DIR / str(run.id)
+        run.artifact_dir = str(artifact_dir)
+        run.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        (artifact_dir / 'request.json').write_text(
+            json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding='utf-8',
+        )
+
+        def update(**fields):
+            current = FeedbackExecutionRun.query.get(run_id)
+            if current is None:
+                return
+            allowed = {
+                'phase', 'worktree_path', 'candidate_branch', 'prompt_hash',
+                'process_id', 'exit_code', 'changed_files',
+            }
+            for key, value in fields.items():
+                if key not in allowed:
+                    continue
+                target = 'changed_files_json' if key == 'changed_files' else key
+                setattr(current, target, value)
+            if current.status == 'preparing' and current.phase == 'running_codex':
+                current.status = 'running'
+            current.version = int(current.version or 1) + 1
+            current.updated_at = datetime.utcnow()
+            db.session.commit()
+
+        def should_stop():
+            current = FeedbackExecutionRun.query.get(run_id)
+            return current is None or bool(current.stop_requested)
+
+        try:
+            result = run_controlled_execution(
+                run.id,
+                issue_snapshot,
+                proposal,
+                base_sha=run.base_sha,
+                artifact_dir=artifact_dir,
+                model=str(os.environ.get('LABELSYSTEM_CODEX_EXECUTION_MODEL') or '').strip(),
+                update=update,
+                should_stop=should_stop,
+            )
+        except CodexExecutionStopped as exc:
+            run = FeedbackExecutionRun.query.get(run_id)
+            run.status = 'stopped'
+            run.phase = 'stopped'
+            run.error_message = str(exc)
+            run.finished_at = datetime.utcnow()
+            run.process_id = None
+            run.version = int(run.version or 1) + 1
+            run.updated_at = run.finished_at
+            db.session.commit()
+            return
+        except Exception as exc:
+            current_app.logger.exception('Controlled feedback execution failed for run %s', run_id)
+            run = FeedbackExecutionRun.query.get(run_id)
+            changed_files_path = artifact_dir / 'changed_files.json'
+            tests_path = artifact_dir / 'tests.json'
+            try:
+                changed_files = json.loads(changed_files_path.read_text(encoding='utf-8')) if changed_files_path.is_file() else []
+            except (OSError, ValueError):
+                changed_files = []
+            try:
+                tests = json.loads(tests_path.read_text(encoding='utf-8')) if tests_path.is_file() else {}
+            except (OSError, ValueError):
+                tests = {}
+            run.status = 'failed'
+            run.phase = 'failed'
+            run.error_message = str(exc)[:12000]
+            run.changed_files_json = changed_files if isinstance(changed_files, list) else []
+            run.tests_json = tests if isinstance(tests, dict) else {}
+            run.tests_passed = tests.get('passed') if isinstance(tests, dict) else None
+            run.finished_at = datetime.utcnow()
+            run.process_id = None
+            run.version = int(run.version or 1) + 1
+            run.updated_at = run.finished_at
+            db.session.commit()
+            return
+
+        run = FeedbackExecutionRun.query.get(run_id)
+        run.status = 'review_ready'
+        run.phase = 'awaiting_human_review'
+        run.candidate_sha = result['candidate_sha']
+        run.candidate_branch = result['candidate_branch']
+        run.worktree_path = result['worktree_path']
+        run.artifact_dir = result['artifact_dir']
+        run.prompt_hash = result['prompt_hash']
+        run.diff_hash = result['diff_hash']
+        run.model_name = result['model_name']
+        run.changed_files_json = result['changed_files']
+        run.tests_json = result['tests']
+        run.tests_passed = bool(result['tests_passed'])
+        run.exit_code = result['exit_code']
+        run.error_message = ''
+        run.finished_at = datetime.utcnow()
+        run.process_id = None
+        run.version = int(run.version or 1) + 1
+        run.updated_at = run.finished_at
+        run.work_plan.execution_note = f"候选提交 {run.candidate_sha[:12]} 已生成，等待人工审查。"
+        db.session.commit()
+
+
 def _upsert_feedback_issue(session_record, source_message, ticket):
     category = str(ticket.get('category') or 'other')
-    issue = None
-    if category != 'ai_experience':
-        issue = (
-            FeedbackIssue.query
-            .filter_by(session_id=session_record.id, category=category)
-            .filter(FeedbackIssue.status.notin_(['fixed', 'closed']))
-            .order_by(FeedbackIssue.updated_at.desc())
-            .first()
-        )
-    if issue is None:
-        issue = FeedbackIssue(
-            session_id=session_record.id,
-            reporter_id=session_record.user_id,
-            category=category,
-            title=str(ticket.get('title') or '未命名问题')[:200],
-        )
-        db.session.add(issue)
+    issue = FeedbackIssue(
+        session_id=session_record.id,
+        reporter_id=session_record.user_id,
+        category=category,
+        title=str(ticket.get('title') or '未命名问题')[:200],
+        created_at=datetime.utcnow(),
+    )
+    db.session.add(issue)
     issue.source_message_id = source_message.id
     issue.category = category
     issue.title = str(ticket.get('title') or issue.title or '未命名问题')[:200]
@@ -3776,6 +4804,25 @@ def _parse_feedback_datetime(value):
         return datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None)
     except ValueError:
         return None
+
+
+def _feedback_sessions_by_latest_user_message(query, limit):
+    latest_user_message_at = (
+        db.session.query(db.func.max(FeedbackMessage.created_at))
+        .filter(
+            FeedbackMessage.session_id == FeedbackSession.id,
+            FeedbackMessage.role == 'user',
+        )
+        .correlate(FeedbackSession)
+        .scalar_subquery()
+    )
+    return (
+        query
+        .add_columns(latest_user_message_at.label('last_user_message_at'))
+        .order_by(latest_user_message_at.desc(), FeedbackSession.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 def _store_feedback_attachment(upload, session_record):
@@ -4387,15 +5434,26 @@ def register_routes(app):
             and agent_result.get('ticket')
             and agent_result['ticket'].get('category') != 'usage_help'
         ):
-            issue = _upsert_feedback_issue(session_record, assistant_message, agent_result['ticket'])
+            issue = _upsert_feedback_issue(session_record, user_message, agent_result['ticket'])
         session_record.last_message_at = assistant_message.created_at
         session_record.updated_at = assistant_message.created_at
         db.session.commit()
+        codex_run = None
+        if (
+            issue is not None
+            and os.environ.get('LABELSYSTEM_CODEX_AUTO_INVESTIGATE', '1').lower() not in {'0', 'false', 'no'}
+        ):
+            try:
+                codex_run, _ = _queue_feedback_codex_investigation(issue, current_user.id)
+            except Exception:
+                db.session.rollback()
+                current_app.logger.exception('Failed to queue automatic Feedback Codex investigation')
         return jsonify({
             'session': session_record.to_dict(),
             'user_message': user_message.to_dict(),
             'assistant_message': assistant_message.to_dict(),
             'issue': issue.to_dict() if issue else None,
+            'codex_investigation': codex_run.to_dict(include_result=False) if codex_run else None,
             'intent': agent_result.get('intent') if agent_result else category_hint or 'other',
             'ai_available': ai_available,
         })
@@ -4640,7 +5698,18 @@ def register_routes(app):
         if issue is None:
             return jsonify({'error': 'Issue not found'}), 404
         plan = FeedbackWorkPlan.query.filter_by(issue_id=issue.id).first()
-        return jsonify({'work_plan': plan.to_dict() if plan else None})
+        investigation = _latest_feedback_codex_run(issue.id)
+        execution = _latest_feedback_execution(issue.id)
+        return jsonify({
+            'work_plan': plan.to_dict() if plan else None,
+            'codex_investigation': investigation.to_dict() if investigation else None,
+            'execution': _execution_to_dict(execution),
+            'execution_capability': {
+                'enabled': True,
+                'version': 1,
+                'mode': 'isolated-worktree-review',
+            },
+        })
 
     @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/generate', methods=['POST'])
     @require_feedback_operator
@@ -4649,28 +5718,21 @@ def register_routes(app):
         if issue is None:
             return jsonify({'error': 'Issue not found'}), 404
         existing = FeedbackWorkPlan.query.filter_by(issue_id=issue.id).first()
-        if existing and existing.status in {'queued', 'verified'}:
-            return jsonify({'error': '执行队列中的方案不能直接覆盖'}), 409
+        if existing and existing.status != 'draft':
+            return jsonify({'error': '已批准或已执行的方案不能直接覆盖，请先完成审查或明确退回草案'}), 409
         revision_note = str((request.json or {}).get('revision_note') or '').strip()[:4000]
         try:
-            proposal = _generate_feedback_work_plan(issue, revision_note)
-        except Exception as exc:
-            current_app.logger.warning('Feedback work plan generation failed: %s', exc)
-            return jsonify({'error': '方案生成暂不可用，请稍后重试'}), 503
-        if existing is None:
-            existing = FeedbackWorkPlan(issue_id=issue.id, created_at=datetime.utcnow())
-            db.session.add(existing)
-        existing.proposal_json = proposal
-        existing.status = 'draft'
-        existing.generated_by_id = current_user.id
-        existing.approved_by_id = None
-        existing.approved_at = None
-        existing.queue_note = ''
-        existing.updated_at = datetime.utcnow()
-        issue.status = 'reviewing'
-        issue.updated_at = datetime.utcnow()
-        db.session.commit()
-        return jsonify({'work_plan': existing.to_dict(), 'issue': issue.to_dict(include_user=True)})
+            run, created = _queue_feedback_codex_investigation(issue, current_user.id, revision_note)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('Failed to queue Feedback Codex investigation')
+            return jsonify({'error': 'Codex 仓库调查暂时无法入队，请稍后重试'}), 503
+        return jsonify({
+            'work_plan': existing.to_dict() if existing else None,
+            'codex_investigation': run.to_dict(include_result=False),
+            'issue': issue.to_dict(include_user=True),
+            'created': created,
+        }), 202
 
     @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan', methods=['PATCH'])
     @require_feedback_operator
@@ -4709,19 +5771,403 @@ def register_routes(app):
         return jsonify({'work_plan': plan.to_dict(), 'issue': issue.to_dict(include_user=True)})
 
     @app.route('/api/admin/feedback/issues/<int:issue_id>/work-plan/queue', methods=['POST'])
-    @require_feedback_operator
+    @require_admin
     def queue_feedback_work_plan(issue_id):
+        if request.headers.get('X-LabelSystem-Action') != 'controlled-feedback':
+            return jsonify({'error': 'Missing controlled execution request header'}), 400
+        issue = FeedbackIssue.query.get(issue_id)
         plan = FeedbackWorkPlan.query.filter_by(issue_id=issue_id).first()
-        if plan is None:
+        if issue is None or plan is None:
             return jsonify({'error': 'Work plan not found'}), 404
-        if plan.status != 'approved':
+        if plan.status not in {'approved', 'queued'}:
             return jsonify({'error': '请先批准方案'}), 409
-        payload = request.json or {}
-        plan.status = 'queued'
-        plan.queue_note = str(payload.get('queue_note') or '已批准，等待受控 Codex 执行器接入。')[:4000]
-        plan.updated_at = datetime.utcnow()
+        investigation = _latest_feedback_codex_run(issue_id)
+        if investigation is not None and investigation.status in {'pending', 'running'}:
+            return jsonify({'error': '该问题仍在进行仓库调查，不能同时启动旧方案执行'}), 409
+        try:
+            execution, created = _queue_feedback_execution(issue, plan, current_user.id)
+        except CodexExecutionError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 409
+        except IntegrityError:
+            db.session.rollback()
+            execution = (
+                FeedbackExecutionRun.query
+                .filter_by(work_plan_id=plan.id)
+                .order_by(FeedbackExecutionRun.id.desc())
+                .first()
+            )
+            if execution is None:
+                return jsonify({'error': '执行队列并发冲突，请刷新后重试'}), 409
+            created = False
+        return jsonify({
+            'work_plan': plan.to_dict(),
+            'execution': _execution_to_dict(execution),
+            'created': created,
+        }), 202 if created else 200
+
+    @app.route('/api/admin/feedback/issues/<int:issue_id>/execution', methods=['GET'])
+    @require_feedback_dashboard_viewer
+    def get_feedback_execution(issue_id):
+        issue = FeedbackIssue.query.get(issue_id)
+        if issue is None:
+            return jsonify({'error': 'Issue not found'}), 404
+        return jsonify({'execution': _execution_to_dict(_latest_feedback_execution(issue_id))})
+
+    def _feedback_execution_or_404(execution_id):
+        return FeedbackExecutionRun.query.get(execution_id)
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/events', methods=['GET'])
+    @require_admin
+    def get_feedback_execution_events(execution_id):
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        try:
+            offset = max(0, int(request.args.get('offset') or 0))
+        except ValueError:
+            return jsonify({'error': 'Invalid offset'}), 400
+        artifact_dir = FEEDBACK_EXECUTION_RUN_DIR / str(run.id)
+        events_path = artifact_dir / 'events.jsonl'
+        chunk = ''
+        next_offset = offset
+        if events_path.is_file():
+            size = events_path.stat().st_size
+            if offset > size:
+                offset = 0
+            with events_path.open('rb') as handle:
+                handle.seek(offset)
+                data = handle.read(65536)
+                next_offset = handle.tell()
+            chunk = data.decode('utf-8', errors='replace')
+        stderr_tail = ''
+        if run.status in {'failed', 'stopped'}:
+            stderr_path = artifact_dir / 'stderr.log'
+            if stderr_path.is_file():
+                stderr_tail = stderr_path.read_text(encoding='utf-8', errors='replace')[-12000:]
+        summary = ''
+        summary_path = artifact_dir / 'summary.txt'
+        if run.status not in {'queued', 'preparing', 'running', 'stopping'} and summary_path.is_file():
+            summary = summary_path.read_text(encoding='utf-8', errors='replace')[-24000:]
+        return jsonify({
+            'events': chunk,
+            'offset': next_offset,
+            'has_more': bool(events_path.is_file() and next_offset < events_path.stat().st_size),
+            'stderr_tail': stderr_tail,
+            'summary': summary,
+            'phase': run.phase,
+            'status': run.status,
+        })
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/diff', methods=['GET'])
+    @require_admin
+    def get_feedback_execution_diff(execution_id):
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        artifact_dir = FEEDBACK_EXECUTION_RUN_DIR / str(run.id)
+        diff_path = artifact_dir / 'changes.diff'
+        stat_path = artifact_dir / 'diff.stat'
+        return jsonify({
+            'files': run.changed_files_json if isinstance(run.changed_files_json, list) else [],
+            'unified_diff': diff_path.read_text(encoding='utf-8', errors='replace') if diff_path.is_file() else '',
+            'stat': stat_path.read_text(encoding='utf-8', errors='replace') if stat_path.is_file() else '',
+        })
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/tests', methods=['GET'])
+    @require_admin
+    def get_feedback_execution_tests(execution_id):
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        return jsonify({
+            'passed': run.tests_passed,
+            'tests': run.tests_json if isinstance(run.tests_json, dict) else {},
+        })
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/stop', methods=['POST'])
+    @require_admin
+    def stop_feedback_execution(execution_id):
+        if request.headers.get('X-LabelSystem-Action') != 'controlled-feedback':
+            return jsonify({'error': 'Missing controlled execution request header'}), 400
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        conflict = _require_execution_version(run, request.json or {})
+        if conflict:
+            return conflict
+        if run.status not in {'queued', 'preparing', 'running'}:
+            return jsonify({'error': '当前执行不能停止'}), 409
+        expected_version = int((request.json or {})['expected_version'])
+        claimed = (
+            FeedbackExecutionRun.query
+            .filter(
+                FeedbackExecutionRun.id == run.id,
+                FeedbackExecutionRun.version == expected_version,
+                FeedbackExecutionRun.status.in_(['queued', 'preparing', 'running']),
+            )
+            .update({
+                FeedbackExecutionRun.stop_requested: True,
+                FeedbackExecutionRun.status: 'stopping',
+                FeedbackExecutionRun.phase: 'stop_requested',
+                FeedbackExecutionRun.version: expected_version + 1,
+                FeedbackExecutionRun.updated_at: datetime.utcnow(),
+            })
+        )
+        if claimed != 1:
+            db.session.rollback()
+            return jsonify({'error': '执行状态已更新，请刷新后重试'}), 409
         db.session.commit()
-        return jsonify({'work_plan': plan.to_dict()})
+        run = FeedbackExecutionRun.query.get(execution_id)
+        stopped = request_feedback_execution_stop(run.id)
+        if not stopped and not run.process_id:
+            run.status = 'stopped'
+            run.phase = 'stopped_before_start'
+            run.finished_at = datetime.utcnow()
+            db.session.commit()
+        return jsonify({'execution': _execution_to_dict(run)})
+
+    def _require_execution_version(run, payload):
+        expected = payload.get('expected_version')
+        if expected is None:
+            return jsonify({'error': 'expected_version is required'}), 400
+        try:
+            matches = int(expected) == int(run.version or 1)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid expected_version'}), 400
+        if not matches:
+            return jsonify({'error': '执行状态已更新，请刷新后重试'}), 409
+        return None
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/review/approve', methods=['POST'])
+    @require_admin
+    def approve_feedback_execution(execution_id):
+        if request.headers.get('X-LabelSystem-Action') != 'controlled-feedback':
+            return jsonify({'error': 'Missing controlled execution request header'}), 400
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        payload = request.json or {}
+        conflict = _require_execution_version(run, payload)
+        if conflict:
+            return conflict
+        if run.status != 'review_ready' or not run.tests_passed:
+            return jsonify({'error': '候选改动尚未通过固定验证或不在待审状态'}), 409
+        if _feedback_plan_hash(run.plan_snapshot_json or {}) != run.plan_hash:
+            return jsonify({'error': '批准方案快照校验失败'}), 409
+        expected_version = int(payload['expected_version'])
+        reviewed_at = datetime.utcnow()
+        claimed = FeedbackExecutionRun.query.filter_by(
+            id=run.id,
+            status='review_ready',
+            version=expected_version,
+            tests_passed=True,
+        ).update({
+            FeedbackExecutionRun.status: 'review_approved',
+            FeedbackExecutionRun.phase: 'approved_for_merge',
+            FeedbackExecutionRun.reviewed_by_id: current_user.id,
+            FeedbackExecutionRun.review_note: str(payload.get('review_note') or '')[:12000],
+            FeedbackExecutionRun.reviewed_at: reviewed_at,
+            FeedbackExecutionRun.version: expected_version + 1,
+            FeedbackExecutionRun.updated_at: reviewed_at,
+        })
+        if claimed != 1:
+            db.session.rollback()
+            return jsonify({'error': '执行状态已更新，请刷新后重试'}), 409
+        db.session.commit()
+        run = FeedbackExecutionRun.query.get(execution_id)
+        return jsonify({'execution': _execution_to_dict(run)})
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/revise', methods=['POST'])
+    @require_admin
+    def revise_feedback_execution_plan(execution_id):
+        if request.headers.get('X-LabelSystem-Action') != 'controlled-feedback':
+            return jsonify({'error': 'Missing controlled execution request header'}), 400
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        payload = request.json or {}
+        conflict = _require_execution_version(run, payload)
+        if conflict:
+            return conflict
+        if run.status not in {'failed', 'stopped', 'review_rejected'}:
+            return jsonify({'error': '当前执行不能退回方案修订'}), 409
+        expected_version = int(payload['expected_version'])
+        updated_at = datetime.utcnow()
+        claimed = (
+            FeedbackExecutionRun.query
+            .filter(
+                FeedbackExecutionRun.id == run.id,
+                FeedbackExecutionRun.version == expected_version,
+                FeedbackExecutionRun.status.in_(['failed', 'stopped', 'review_rejected']),
+            )
+            .update({
+                FeedbackExecutionRun.phase: 'plan_revision_requested',
+                FeedbackExecutionRun.version: expected_version + 1,
+                FeedbackExecutionRun.updated_at: updated_at,
+            })
+        )
+        if claimed != 1:
+            db.session.rollback()
+            return jsonify({'error': '执行状态已更新，请刷新后重试'}), 409
+        db.session.expire_all()
+        run = FeedbackExecutionRun.query.get(execution_id)
+        run.work_plan.status = 'draft'
+        run.work_plan.approved_by_id = None
+        run.work_plan.approved_at = None
+        run.work_plan.queue_note = ''
+        run.work_plan.updated_at = updated_at
+        run.issue.status = 'reviewing'
+        run.issue.updated_at = updated_at
+        db.session.commit()
+        return jsonify({'execution': _execution_to_dict(run), 'work_plan': run.work_plan.to_dict()})
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/review/reject', methods=['POST'])
+    @require_admin
+    def reject_feedback_execution(execution_id):
+        if request.headers.get('X-LabelSystem-Action') != 'controlled-feedback':
+            return jsonify({'error': 'Missing controlled execution request header'}), 400
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        payload = request.json or {}
+        conflict = _require_execution_version(run, payload)
+        if conflict:
+            return conflict
+        if run.status not in {'review_ready', 'review_approved'}:
+            return jsonify({'error': '当前候选不能拒绝'}), 409
+        note = str(payload.get('review_note') or '').strip()
+        if not note:
+            return jsonify({'error': '请填写拒绝原因，供下一次执行修订'}), 400
+        expected_version = int(payload['expected_version'])
+        reviewed_at = datetime.utcnow()
+        claimed = (
+            FeedbackExecutionRun.query
+            .filter(
+                FeedbackExecutionRun.id == run.id,
+                FeedbackExecutionRun.version == expected_version,
+                FeedbackExecutionRun.status.in_(['review_ready', 'review_approved']),
+            )
+            .update({
+                FeedbackExecutionRun.status: 'review_rejected',
+                FeedbackExecutionRun.phase: 'rejected_by_human',
+                FeedbackExecutionRun.reviewed_by_id: current_user.id,
+                FeedbackExecutionRun.review_note: note[:12000],
+                FeedbackExecutionRun.reviewed_at: reviewed_at,
+                FeedbackExecutionRun.version: expected_version + 1,
+                FeedbackExecutionRun.updated_at: reviewed_at,
+            })
+        )
+        if claimed != 1:
+            db.session.rollback()
+            return jsonify({'error': '执行状态已更新，请刷新后重试'}), 409
+        db.session.expire_all()
+        run = FeedbackExecutionRun.query.get(execution_id)
+        run.work_plan.status = 'draft'
+        run.work_plan.approved_by_id = None
+        run.work_plan.approved_at = None
+        run.work_plan.queue_note = ''
+        run.work_plan.updated_at = reviewed_at
+        run.issue.status = 'reviewing'
+        run.issue.updated_at = reviewed_at
+        db.session.commit()
+        return jsonify({'execution': _execution_to_dict(run)})
+
+    @app.route('/api/admin/feedback/executions/<int:execution_id>/merge', methods=['POST'])
+    @require_admin
+    def merge_feedback_execution(execution_id):
+        if request.headers.get('X-LabelSystem-Action') != 'controlled-feedback':
+            return jsonify({'error': 'Missing controlled execution request header'}), 400
+        run = _feedback_execution_or_404(execution_id)
+        if run is None:
+            return jsonify({'error': 'Execution not found'}), 404
+        payload = request.json or {}
+        conflict = _require_execution_version(run, payload)
+        if conflict:
+            return conflict
+        if run.status != 'review_approved' or not run.tests_passed or not run.candidate_sha:
+            return jsonify({'error': '候选改动尚未获得人工批准'}), 409
+        if str(payload.get('candidate_sha') or '') != run.candidate_sha:
+            return jsonify({'error': '请提交页面显示的完整 candidate SHA 进行二次确认'}), 400
+        expected_version = int(payload['expected_version'])
+        claimed_version = expected_version + 1
+        claimed = FeedbackExecutionRun.query.filter_by(
+            id=run.id,
+            status='review_approved',
+            version=expected_version,
+            tests_passed=True,
+        ).update({
+            FeedbackExecutionRun.status: 'merging',
+            FeedbackExecutionRun.phase: 'validating_merge',
+            FeedbackExecutionRun.version: claimed_version,
+            FeedbackExecutionRun.updated_at: datetime.utcnow(),
+        })
+        if claimed != 1:
+            db.session.rollback()
+            return jsonify({'error': '执行状态已更新，请刷新后重试'}), 409
+        db.session.commit()
+        run = FeedbackExecutionRun.query.get(execution_id)
+        artifact_dir = FEEDBACK_EXECUTION_RUN_DIR / str(run.id)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        (artifact_dir / 'merge-intent.json').write_text(json.dumps({
+            'execution_id': run.id,
+            'base_sha': run.base_sha,
+            'candidate_sha': run.candidate_sha,
+            'diff_hash': run.diff_hash,
+            'target_branch': run.target_branch,
+            'requested_by_id': current_user.id,
+            'requested_at': datetime.utcnow().isoformat(),
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        try:
+            merged_sha = merge_candidate(run.base_sha, run.candidate_sha, run.target_branch, run.diff_hash)
+        except CodexExecutionError as exc:
+            failed_version = claimed_version + 1
+            FeedbackExecutionRun.query.filter_by(
+                id=execution_id,
+                status='merging',
+                version=claimed_version,
+            ).update({
+                FeedbackExecutionRun.status: 'review_approved',
+                FeedbackExecutionRun.phase: 'merge_blocked',
+                FeedbackExecutionRun.error_message: str(exc)[:12000],
+                FeedbackExecutionRun.version: failed_version,
+                FeedbackExecutionRun.updated_at: datetime.utcnow(),
+            })
+            db.session.commit()
+            run = FeedbackExecutionRun.query.get(execution_id)
+            return jsonify({'error': str(exc), 'execution': _execution_to_dict(run)}), 409
+        db.session.expire_all()
+        run = FeedbackExecutionRun.query.get(execution_id)
+        if run.status != 'merging' or int(run.version or 0) != claimed_version:
+            return jsonify({'error': '合并完成但审计状态发生冲突，请立即人工核对 HEAD', 'execution': _execution_to_dict(run)}), 409
+        run.status = 'merged'
+        run.phase = 'merged_waiting_release'
+        run.merged_by_id = current_user.id
+        run.merged_at = datetime.utcnow()
+        run.merge_note = f'fast-forward merged at {merged_sha}'
+        run.error_message = ''
+        run.version = int(run.version or 1) + 1
+        run.updated_at = run.merged_at
+        run.work_plan.status = 'verified'
+        run.work_plan.execution_note = f'候选提交 {merged_sha[:12]} 已合并；尚未发布。'
+        run.issue.status = 'fixed'
+        run.issue.updated_at = run.merged_at
+        (artifact_dir / 'merge.json').write_text(json.dumps({
+            'execution_id': run.id,
+            'base_sha': run.base_sha,
+            'candidate_sha': run.candidate_sha,
+            'merged_sha': merged_sha,
+            'target_branch': run.target_branch,
+            'merged_by_id': current_user.id,
+            'merged_at': run.merged_at.isoformat(),
+            'release_performed': False,
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        db.session.commit()
+        return jsonify({
+            'execution': _execution_to_dict(run),
+            'work_plan': run.work_plan.to_dict(),
+            'issue': run.issue.to_dict(include_user=True),
+        })
 
     @app.route('/api/admin/feedback/sessions', methods=['GET'])
     @require_feedback_dashboard_viewer
@@ -4741,8 +6187,15 @@ def register_routes(app):
             else:
                 query = query.filter(FeedbackSession.created_at <= end)
         limit = min(max(request.args.get('limit', default=200, type=int), 1), 500)
-        records = query.order_by(FeedbackSession.last_message_at.desc()).limit(limit).all()
-        return jsonify({'sessions': [item.to_dict(include_user=True) for item in records]})
+        records = _feedback_sessions_by_latest_user_message(query, limit)
+        sessions = []
+        for session_record, last_user_message_at in records:
+            payload = session_record.to_dict(include_user=True)
+            payload['last_user_message_at'] = (
+                last_user_message_at.isoformat() if last_user_message_at else None
+            )
+            sessions.append(payload)
+        return jsonify({'sessions': sessions})
 
     @app.route('/api/admin/feedback/sessions/<int:session_id>/messages', methods=['GET'])
     @require_feedback_dashboard_viewer
@@ -5242,6 +6695,75 @@ def register_routes(app):
     @require_admin
     def list_assignment_presets():
         return jsonify({'presets': _assignment_case_library_presets()})
+
+
+    @app.route('/api/admin/dataset-access', methods=['GET', 'PUT'])
+    @require_admin
+    def manage_dataset_access():
+        if request.method == 'GET':
+            return jsonify(_dataset_access_overview())
+
+        payload = request.get_json(silent=True) or {}
+        namespace = str(payload.get('namespace') or 'functional').strip()
+        dataset = str(payload.get('dataset') or '').strip()
+        if not dataset:
+            return jsonify({'error': 'Missing dataset'}), 400
+        if 'user_ids' not in payload:
+            return jsonify({'error': 'Missing user_ids'}), 400
+        expected_revision = str(payload.get('expected_revision') or '').strip()
+        if not expected_revision:
+            return jsonify({'error': 'Missing expected_revision'}), 400
+        if _configured_dataset_access_definition(namespace, dataset) is None:
+            return jsonify({'error': '数据集不存在或不支持整库权限'}), 404
+
+        with dataset_access_update_lock:
+            current_revision = _dataset_access_revision(namespace, dataset)
+            if expected_revision != current_revision:
+                return jsonify({
+                    'error': '权限已被其他管理员修改，页面已过期，请刷新后重试。',
+                    'current_revision': current_revision,
+                }), 409
+            try:
+                previous_user_ids = _active_dataset_access_user_ids(namespace, dataset)
+                selected_user_ids = _replace_dataset_access_grants(
+                    namespace,
+                    dataset,
+                    payload.get('user_ids'),
+                    current_user.id,
+                )
+                selected_user_id_set = set(selected_user_ids)
+                audit_events = _append_dataset_access_audit(
+                    namespace,
+                    dataset,
+                    added_user_ids=selected_user_id_set - previous_user_ids,
+                    removed_user_ids=previous_user_ids - selected_user_id_set,
+                    actor=current_user,
+                    request_ip=request.remote_addr,
+                )
+                audit_batch_id = audit_events[0].batch_id if audit_events else None
+                db.session.commit()
+            except (ValueError, LookupError) as exc:
+                db.session.rollback()
+                return jsonify({'error': str(exc)}), 400
+            except Exception:
+                db.session.rollback()
+                raise
+
+            try:
+                _invalidate_admin_monitor_cache()
+            except Exception as exc:
+                current_app.logger.warning('Failed to invalidate admin monitor cache: %s', exc)
+
+        return jsonify({
+            **_dataset_access_overview(),
+            'updated': {
+                'namespace': namespace,
+                'dataset': dataset,
+                'user_ids': selected_user_ids,
+                'audit_event_count': len(audit_events),
+                'audit_batch_id': audit_batch_id,
+            },
+        })
 
 
     @app.route('/api/admin/assignment-library-cases', methods=['GET'])
@@ -5829,69 +7351,82 @@ def register_routes(app):
     @app.route('/api/admin/monitor', methods=['GET'])
     @require_admin
     def admin_monitor():
-        data_root = current_app.config['DATA_ROOT']
-        eval_root = current_app.config['EVAL_ROOT']
-        functional_root = current_app.config['FUNCTIONAL_DATA_ROOT']
-        db_path = current_app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '', 1)
+        # Authentication has already completed. Do not retain that request's
+        # connection while another monitor refresh is running.
+        db.session.remove()
+        with admin_monitor_refresh_lock:
+            now = time.monotonic()
+            cached_payload = admin_monitor_cache.get('payload')
+            cache_age = now - float(admin_monitor_cache.get('generated_monotonic') or 0.0)
+            if cached_payload is not None and cache_age < ADMIN_MONITOR_CACHE_TTL_SECONDS:
+                return jsonify(cached_payload)
 
-        total_users = User.query.count()
-        pending_users = User.query.filter_by(is_approved=False).count()
-        approved_users = User.query.filter_by(is_approved=True).count()
-        admin_users = User.query.filter_by(is_admin=True).count()
+            data_root = current_app.config['DATA_ROOT']
+            eval_root = current_app.config['EVAL_ROOT']
+            functional_root = current_app.config['FUNCTIONAL_DATA_ROOT']
+            db_path = current_app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '', 1)
 
-        cvi_total = CviCaseCatalog.query.count()
-        cvi_imported = CviCaseCatalog.query.filter(CviCaseCatalog.cvi_study_id.isnot(None)).count()
-        cvi_dicom_cases = CviCaseCatalog.query.filter_by(has_dicom=True).count()
-
-        return jsonify({
-            'system': _system_snapshot(),
-            'users': {
-                'total': total_users,
-                'pending': pending_users,
-                'approved': approved_users,
-                'admins': admin_users,
+            users_payload = {
+                'total': User.query.count(),
+                'pending': User.query.filter_by(is_approved=False).count(),
+                'approved': User.query.filter_by(is_approved=True).count(),
+                'admins': User.query.filter_by(is_admin=True).count(),
                 'workloads': _user_workloads(),
-            },
-            'data': {
-                'roots': [
-                    {
-                        'key': 'segmentation',
-                        'label': '原始标注数据目录',
-                        'path': data_root,
-                        **_count_case_tree(data_root, mode='flat'),
-                        'disk': _safe_disk_usage(data_root),
+            }
+            cvi_payload = {
+                'total': CviCaseCatalog.query.count(),
+                'imported': CviCaseCatalog.query.filter(CviCaseCatalog.cvi_study_id.isnot(None)).count(),
+                'dicom_cases': CviCaseCatalog.query.filter_by(has_dicom=True).count(),
+            }
+            table_counts = _database_table_counts()
+            annotations_payload = _annotation_overview()
+            security_payload = _security_overview()
+
+            # The remaining work can scan large directory trees and invoke
+            # nvidia-smi. Release SQLite before doing that slower I/O.
+            db.session.remove()
+            payload = {
+                'system': _system_snapshot(),
+                'users': users_payload,
+                'data': {
+                    'roots': [
+                        {
+                            'key': 'segmentation',
+                            'label': '原始标注数据目录',
+                            'path': data_root,
+                            **_count_case_tree(data_root, mode='flat'),
+                            'disk': _safe_disk_usage(data_root),
+                        },
+                        {
+                            'key': 'functional',
+                            'label': 'MRIAgent 数据目录',
+                            'path': functional_root,
+                            **_count_case_tree(functional_root, mode='two_level'),
+                            'disk': _safe_disk_usage(functional_root),
+                        },
+                        {
+                            'key': 'eval',
+                            'label': '报告/评估输出目录',
+                            'path': eval_root,
+                            **_count_case_tree(eval_root, mode='two_level'),
+                            'disk': _safe_disk_usage(eval_root),
+                        },
+                    ],
+                    'cvi_catalog': cvi_payload,
+                    'database': {
+                        'path': db_path,
+                        'size_bytes': os.path.getsize(db_path) if os.path.exists(db_path) else 0,
+                        'tables': table_counts,
                     },
-                    {
-                        'key': 'functional',
-                        'label': 'MRIAgent 数据目录',
-                        'path': functional_root,
-                        **_count_case_tree(functional_root, mode='two_level'),
-                        'disk': _safe_disk_usage(functional_root),
-                    },
-                    {
-                        'key': 'eval',
-                        'label': '报告/评估输出目录',
-                        'path': eval_root,
-                        **_count_case_tree(eval_root, mode='two_level'),
-                        'disk': _safe_disk_usage(eval_root),
-                    },
-                ],
-                'cvi_catalog': {
-                    'total': cvi_total,
-                    'imported': cvi_imported,
-                    'dicom_cases': cvi_dicom_cases,
+                    'dataset_mappings': _dataset_monitor_overview(data_root, functional_root, eval_root),
                 },
-                'database': {
-                    'path': db_path,
-                    'size_bytes': os.path.getsize(db_path) if os.path.exists(db_path) else 0,
-                    'tables': _database_table_counts(),
-                },
-                'dataset_mappings': _dataset_monitor_overview(data_root, functional_root, eval_root),
-            },
-            'annotations': _annotation_overview(),
-            'security': _security_overview(),
-            'llm_gateway': _llm_gateway_monitor_payload(),
-        })
+                'annotations': annotations_payload,
+                'security': security_payload,
+                'llm_gateway': _llm_gateway_monitor_payload(),
+            }
+            admin_monitor_cache['generated_monotonic'] = time.monotonic()
+            admin_monitor_cache['payload'] = payload
+            return jsonify(payload)
 
     @app.route('/api/annotations/<sample_id>/<sequence>', methods=['POST'])
     def save_annotations(sample_id, sequence):
@@ -7581,6 +9116,9 @@ def register_routes(app):
         guard = _guard_media_access('experiment-image', namespace='experiment', dataset='', case_id=measurement, path=image_type)
         if guard:
             return guard
+        viewer_user_id = int(current_user.id) if current_user.is_authenticated else None
+        viewer_username = str(current_user.username or 'viewer') if current_user.is_authenticated else 'viewer'
+        watermark_text = _watermark_text(viewer_username)
         # image_type example: 'BlandAltman'
         # Filename format: {measurement}_{image_type}.png
 
@@ -7590,13 +9128,25 @@ def register_routes(app):
         adjusted_path = os.path.join(ADJUSTED_RESULTS_DIR, measurement, filename)
         if os.path.exists(adjusted_path):
             _log_media_access('experiment-image', 'ok', namespace='experiment', dataset='', case_id=measurement, path=image_type)
-            return _watermarked_file_response(adjusted_path, filename)
+            db.session.remove()
+            return _watermarked_file_response(
+                adjusted_path,
+                filename,
+                watermark_text=watermark_text,
+                viewer_user_id=viewer_user_id,
+            )
             
         # Check main
         main_path = os.path.join(MAIN_RESULTS_DIR, measurement, filename)
         if os.path.exists(main_path):
             _log_media_access('experiment-image', 'ok', namespace='experiment', dataset='', case_id=measurement, path=image_type)
-            return _watermarked_file_response(main_path, filename)
+            db.session.remove()
+            return _watermarked_file_response(
+                main_path,
+                filename,
+                watermark_text=watermark_text,
+                viewer_user_id=viewer_user_id,
+            )
 
         return jsonify({'error': 'Image not found'}), 404
 
@@ -7771,27 +9321,13 @@ def register_routes(app):
     @app.route('/api/functional/cases/<dataset>/<case_id>', methods=['GET'])
     @login_required
     def get_functional_case_detail(dataset, case_id):
-        # Handle URL encoding: case_id might contain spaces (e.g. "yang%20fang")
-        # Flask usually decodes this, but verify.
-        # However, spaces in filenames on disk are real.
-        
-        func_root = current_app.config['FUNCTIONAL_DATA_ROOT']
-        case_path = os.path.join(func_root, dataset, case_id)
-        
-        # Fallback for new_ prefix
-        if not os.path.exists(case_path) and dataset.startswith('new_'):
-             alt_dataset = dataset.replace('new_', '', 1)
-             alt_path = os.path.join(func_root, alt_dataset, case_id)
-             if os.path.exists(alt_path):
-                 case_path = alt_path
-        
-        # If still not found, check if it's because of "new_" logic missing for the folder itself
-        # func_root structure: CMR_ALL, CMR_Chendu, etc.
-        # If user asks for new_CMR_ALL/case_id, but func_root only has CMR_ALL/case_id
-        # The logic above handles it.
-        
-        if not os.path.exists(case_path):
-            return jsonify({'error': 'Case not found', 'path': case_path}), 404
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
+        resolved_case_path = _resolve_assessment_case_path(dataset, case_id)
+        if resolved_case_path is None:
+            return jsonify({'error': '当前病例影像目录不可用，请刷新病例库或联系管理员。'}), 404
+        case_path = str(resolved_case_path)
             
         # Find images
         images = {
@@ -8054,22 +9590,13 @@ def register_routes(app):
         guard = _guard_media_access('functional-image', namespace='functional', dataset=dataset, case_id=case_id, path=subpath)
         if guard:
             return guard
-        func_root = current_app.config['FUNCTIONAL_DATA_ROOT']
-        # subpath could be "SAX/file.dcm" or "LGE=3-10/file.dcm"
+        case_path = _resolve_assessment_case_path(dataset, case_id)
+        if case_path is None:
+            return jsonify({'error': 'File not found'}), 404
         try:
-            file_path = _resolve_under(func_root, dataset, case_id, subpath)
+            file_path = _resolve_under(str(case_path), subpath)
         except ValueError:
             return jsonify({'error': 'Access denied'}), 403
-        
-        # Fallback for new_ prefix
-        if not os.path.exists(file_path) and dataset.startswith('new_'):
-             alt_dataset = dataset.replace('new_', '', 1)
-             try:
-                 alt_path = _resolve_under(func_root, alt_dataset, case_id, subpath)
-             except ValueError:
-                 alt_path = ''
-             if os.path.exists(alt_path):
-                 file_path = alt_path
 
         if not os.path.exists(file_path):
             return jsonify({'error': 'File not found'}), 404
@@ -8106,6 +9633,9 @@ def register_routes(app):
     @app.route('/api/functional/cases/<dataset>/<case_id>/assessment', methods=['POST'])
     @login_required
     def save_functional_assessment(dataset, case_id):
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
         data = request.json
         if not data:
             return jsonify({'error': 'No data provided'}), 400
@@ -8213,18 +9743,13 @@ def register_routes(app):
         return get_lge_case_detail_impl(dataset, case_id, LGEAnalysis)
 
     def get_lge_case_detail_impl(dataset, case_id, model_class):
-        func_root = current_app.config['FUNCTIONAL_DATA_ROOT']
-        case_path = os.path.join(func_root, dataset, case_id)
-        
-        # Fallback for new_ prefix
-        if not os.path.exists(case_path) and dataset.startswith('new_'):
-             alt_dataset = dataset.replace('new_', '', 1)
-             alt_path = os.path.join(func_root, alt_dataset, case_id)
-             if os.path.exists(alt_path):
-                 case_path = alt_path
-
-        if not os.path.exists(case_path):
-            return jsonify({'error': 'Case not found'}), 404
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
+        resolved_case_path = _resolve_assessment_case_path(dataset, case_id)
+        if resolved_case_path is None:
+            return jsonify({'error': '当前病例影像目录不可用，请刷新病例库或联系管理员。'}), 404
+        case_path = str(resolved_case_path)
             
         # Find images - Only LGE
         images = {
@@ -8288,6 +9813,9 @@ def register_routes(app):
     @app.route('/api/lge/cases/<dataset>/<case_id>/assessment', methods=['POST'])
     @login_required
     def save_lge_assessment(dataset, case_id):
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
         data = request.json
         if not data:
             return jsonify({'error': 'No data provided'}), 400
@@ -8360,19 +9888,14 @@ def register_routes(app):
         return get_analysis_case_detail_impl(dataset, case_id, ImageAnalysis)
 
     def get_analysis_case_detail_impl(dataset, case_id, model_class):
-        func_root = current_app.config['FUNCTIONAL_DATA_ROOT']
         eval_root = current_app.config.get('EVAL_ROOT', '')
-        case_path = os.path.join(func_root, dataset, case_id)
-        
-        # Fallback for new_ prefix
-        if not os.path.exists(case_path) and dataset.startswith('new_'):
-             alt_dataset = dataset.replace('new_', '', 1)
-             alt_path = os.path.join(func_root, alt_dataset, case_id)
-             if os.path.exists(alt_path):
-                 case_path = alt_path
-
-        if not os.path.exists(case_path):
-            return jsonify({'error': 'Case not found'}), 404
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
+        resolved_case_path = _resolve_assessment_case_path(dataset, case_id)
+        if resolved_case_path is None:
+            return jsonify({'error': '当前病例影像目录不可用，请刷新病例库或联系管理员。'}), 404
+        case_path = str(resolved_case_path)
             
         # Find images - LGE, SAX, 4CH
         images = {
@@ -8447,6 +9970,9 @@ def register_routes(app):
     @app.route('/api/analysis/cases/<dataset>/<case_id>/assessment', methods=['POST'])
     @login_required
     def save_analysis_assessment(dataset, case_id):
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
         data = request.json
         if not data:
             return jsonify({'error': 'No data provided'}), 400
@@ -8535,18 +10061,13 @@ def register_routes(app):
     @app.route('/api/other-findings/cases/<dataset>/<case_id>', methods=['GET'])
     @login_required
     def get_other_findings_case_detail(dataset, case_id):
-        func_root = current_app.config['FUNCTIONAL_DATA_ROOT']
-        case_path = os.path.join(func_root, dataset, case_id)
-        
-        # Fallback for new_ prefix
-        if not os.path.exists(case_path) and dataset.startswith('new_'):
-             alt_dataset = dataset.replace('new_', '', 1)
-             alt_path = os.path.join(func_root, alt_dataset, case_id)
-             if os.path.exists(alt_path):
-                 case_path = alt_path
-
-        if not os.path.exists(case_path):
-            return jsonify({'error': 'Case not found'}), 404
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
+        resolved_case_path = _resolve_assessment_case_path(dataset, case_id)
+        if resolved_case_path is None:
+            return jsonify({'error': '当前病例影像目录不可用，请刷新病例库或联系管理员。'}), 404
+        case_path = str(resolved_case_path)
             
         # Find images - All types (SAX, 4CH, LGE)
         images = {
@@ -8632,6 +10153,9 @@ def register_routes(app):
     @app.route('/api/other-findings/cases/<dataset>/<case_id>/assessment', methods=['POST'])
     @login_required
     def save_other_findings_assessment(dataset, case_id):
+        assignment_guard = _guard_case_assignment('functional', dataset, case_id)
+        if assignment_guard:
+            return assignment_guard
         data = request.json
         if not data:
             return jsonify({'error': 'No data provided'}), 400

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { FaArrowLeft, FaChartLine, FaClipboardCheck, FaComments, FaCopy, FaExclamationTriangle, FaFilter, FaPlay, FaRegEye, FaShieldAlt, FaSyncAlt } from 'react-icons/fa';
@@ -48,6 +48,7 @@ interface FeedbackSession {
   title: string;
   created_at: string;
   last_message_at: string;
+  last_user_message_at?: string | null;
 }
 
 interface FeedbackMessage {
@@ -74,15 +75,74 @@ interface FeedbackWorkPlan {
   proposal: {
     solution_summary?: string;
     implementation_steps?: string[];
+    allowed_paths?: string[];
     risks?: { level?: string; risk?: string; mitigation?: string }[];
     verification_steps?: string[];
     execution_scope?: string;
     codex_brief?: string;
+    repository_evidence?: { path?: string; line_start?: number; line_end?: number; reason?: string }[];
+    confidence?: 'high' | 'medium' | 'low' | string;
+    base_sha?: string;
+    branch?: string;
+    dirty_worktree?: boolean;
+    clarifying_question?: string;
+    reproducibility?: 'code_only' | 'demo_cases' | 'production_data_required' | string;
+    data_requirements?: string;
   };
   generated_by?: string | null;
   approved_by?: string | null;
   approved_at?: string | null;
   queue_note?: string;
+  execution_note?: string;
+}
+
+interface FeedbackCodexRun {
+  id: number;
+  issue_id: number;
+  status: 'pending' | 'running' | 'completed' | 'failed' | string;
+  phase: string;
+  base_sha?: string;
+  branch?: string;
+  dirty_worktree?: boolean;
+  model_name?: string;
+  error_message?: string;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+interface FeedbackExecutionRun {
+  id: number;
+  issue_id: number;
+  work_plan_id: number;
+  attempt: number;
+  status: 'queued' | 'preparing' | 'running' | 'stopping' | 'stopped' | 'failed' | 'review_ready' | 'review_approved' | 'review_rejected' | 'merging' | 'merged' | string;
+  phase: string;
+  base_sha: string;
+  target_branch: string;
+  candidate_branch?: string;
+  candidate_sha?: string;
+  diff_hash?: string;
+  changed_files?: string[];
+  changed_file_count: number;
+  tests?: { commands?: { id: string; command?: string[]; passed: boolean; exit_code?: number; error?: string }[]; passed?: boolean };
+  tests_passed?: boolean | null;
+  review_note?: string;
+  merge_note?: string;
+  error_message?: string;
+  stop_requested?: boolean;
+  version: number;
+  initiated_by?: string | null;
+  reviewed_by?: string | null;
+  merged_by?: string | null;
+  worktree_path?: string;
+  artifact_dir?: string;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  reviewed_at?: string | null;
+  merged_at?: string | null;
+  updated_at?: string | null;
 }
 
 const categoryLabels: Record<string, string> = {
@@ -112,8 +172,29 @@ const scopeLabels: Record<string, string> = {
 const workPlanStatusLabels: Record<string, string> = {
   draft: '待确认方案',
   approved: '已批准',
-  queued: '等待执行器',
+  queued: '受控执行中/待审',
   verified: '已验证',
+};
+
+const executionStatusLabels: Record<string, string> = {
+  queued: '等待执行',
+  preparing: '创建独立工作树',
+  running: 'Codex 修改中',
+  stopping: '正在停止',
+  stopped: '已停止',
+  failed: '执行失败',
+  review_ready: '等待代码审查',
+  review_approved: '代码已批准',
+  review_rejected: '代码已拒绝',
+  merging: '正在合并',
+  merged: '已合并，未发布',
+};
+
+const codexInvestigationStatusLabels: Record<string, string> = {
+  pending: '仓库调查排队中',
+  running: 'Codex 正在调查仓库',
+  completed: '仓库调查完成',
+  failed: '仓库调查失败',
 };
 
 const readJson = async (response: Response) => {
@@ -139,6 +220,7 @@ const AdminFeedbackPage: React.FC = () => {
   const location = useLocation();
   const readOnly = !user?.is_admin;
   const canOperatePlans = !!user?.is_admin || user?.username === 'ziantestpov';
+  const canControlExecution = !!user?.is_admin;
   const isDedicatedDashboard = location.pathname === '/feedback-dashboard';
   const [view, setView] = useState<'issues' | 'sessions'>('issues');
   const [overview, setOverview] = useState<FeedbackOverview | null>(null);
@@ -148,6 +230,16 @@ const AdminFeedbackPage: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<FeedbackSession | null>(null);
   const [messages, setMessages] = useState<FeedbackMessage[]>([]);
   const [workPlan, setWorkPlan] = useState<FeedbackWorkPlan | null>(null);
+  const [codexInvestigation, setCodexInvestigation] = useState<FeedbackCodexRun | null>(null);
+  const [executionRun, setExecutionRun] = useState<FeedbackExecutionRun | null>(null);
+  const [executionCapability, setExecutionCapability] = useState(false);
+  const [executionEvents, setExecutionEvents] = useState('');
+  const [executionEventOffset, setExecutionEventOffset] = useState(0);
+  const [executionSummary, setExecutionSummary] = useState('');
+  const [executionDiff, setExecutionDiff] = useState<{ files: string[]; unified_diff: string; stat: string }>({ files: [], unified_diff: '', stat: '' });
+  const [executionTab, setExecutionTab] = useState<'events' | 'diff' | 'tests' | 'review'>('events');
+  const [reviewNote, setReviewNote] = useState('');
+  const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [editingIssue, setEditingIssue] = useState(false);
   const [issueDraft, setIssueDraft] = useState<Partial<FeedbackIssue>>({});
   const [editingPlan, setEditingPlan] = useState(false);
@@ -163,6 +255,9 @@ const AdminFeedbackPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [error, setError] = useState('');
+  const selectedIssueIdRef = useRef<number | null>(null);
+  const executionRunIdRef = useRef<number | null>(null);
+  const executionEventsLoadingRef = useRef(false);
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -247,15 +342,27 @@ const AdminFeedbackPage: React.FC = () => {
     try {
       const response = await fetch(`/api/admin/feedback/issues/${issueId}/work-plan`);
       const payload = await readJson(response);
+      if (selectedIssueIdRef.current !== issueId) return;
       setWorkPlan(payload.work_plan || null);
+      setCodexInvestigation(payload.codex_investigation || null);
+      setExecutionRun(payload.execution || null);
+      setExecutionCapability(payload.execution_capability?.enabled === true);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载方案失败');
     }
   }, []);
 
   useEffect(() => {
+    selectedIssueIdRef.current = selectedIssue?.id || null;
     if (!selectedIssue) {
       setWorkPlan(null);
+      setCodexInvestigation(null);
+      setExecutionRun(null);
+      setExecutionCapability(false);
+      setExecutionEvents('');
+      setExecutionEventOffset(0);
+      setExecutionSummary('');
+      setExecutionDiff({ files: [], unified_diff: '', stat: '' });
       setEditingIssue(false);
       setEditingPlan(false);
       return;
@@ -263,8 +370,74 @@ const AdminFeedbackPage: React.FC = () => {
     setEditingIssue(false);
     setEditingPlan(false);
     setIssueDraft({});
+    setCodexInvestigation(null);
+    setExecutionRun(null);
+    setExecutionCapability(false);
+    setExecutionEvents('');
+    setExecutionEventOffset(0);
+    setExecutionSummary('');
+    setExecutionDiff({ files: [], unified_diff: '', stat: '' });
+    setExecutionTab('events');
+    setReviewNote('');
     void loadWorkPlan(selectedIssue.id);
   }, [loadWorkPlan, selectedIssue?.id]);
+
+  useEffect(() => {
+    if (!selectedIssue || !['pending', 'running'].includes(codexInvestigation?.status || '')) return;
+    const timer = window.setInterval(() => {
+      void loadWorkPlan(selectedIssue.id);
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [codexInvestigation?.status, loadWorkPlan, selectedIssue?.id]);
+
+  const executionActive = ['queued', 'preparing', 'running', 'stopping', 'merging'].includes(executionRun?.status || '');
+
+  useEffect(() => {
+    if (!selectedIssue || !executionActive) return;
+    const timer = window.setInterval(() => {
+      void loadWorkPlan(selectedIssue.id);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [executionActive, loadWorkPlan, selectedIssue?.id]);
+
+  const loadExecutionEvents = useCallback(async (run: FeedbackExecutionRun, offset: number) => {
+    if (executionEventsLoadingRef.current) return;
+    executionEventsLoadingRef.current = true;
+    try {
+      const response = await fetch(`/api/admin/feedback/executions/${run.id}/events?offset=${offset}`);
+      const payload = await readJson(response);
+      if (executionRunIdRef.current !== run.id) return;
+      if (payload.events) setExecutionEvents(current => `${current}${payload.events}`.slice(-180000));
+      setExecutionEventOffset(payload.offset || offset);
+      if (payload.summary) setExecutionSummary(payload.summary);
+      if (payload.stderr_tail && !payload.events) setExecutionEvents(current => `${current}\n${payload.stderr_tail}`.slice(-180000));
+    } finally {
+      executionEventsLoadingRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    executionRunIdRef.current = executionRun?.id || null;
+    if (!executionRun || !canControlExecution) return;
+    void loadExecutionEvents(executionRun, executionEventOffset).catch(err => setError(err instanceof Error ? err.message : '加载执行记录失败'));
+    if (!executionActive) return;
+    const timer = window.setInterval(() => {
+      void loadExecutionEvents(executionRun, executionEventOffset).catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [canControlExecution, executionActive, executionEventOffset, executionRun?.id, loadExecutionEvents]);
+
+  useEffect(() => {
+    if (!canControlExecution || !executionRun || !['failed', 'stopped', 'review_ready', 'review_approved', 'review_rejected', 'merged'].includes(executionRun.status)) return;
+    void Promise.all([
+      fetch(`/api/admin/feedback/executions/${executionRun.id}/diff`).then(readJson),
+      fetch(`/api/admin/feedback/executions/${executionRun.id}/tests`).then(readJson),
+    ]).then(([diffPayload, testsPayload]) => {
+      if (executionRunIdRef.current !== executionRun.id) return;
+      setExecutionDiff(diffPayload);
+      setExecutionRun(current => current?.id === executionRun.id ? { ...current, tests: testsPayload.tests, tests_passed: testsPayload.passed } : current);
+    }).catch(err => setError(err instanceof Error ? err.message : '加载候选改动失败'));
+  }, [canControlExecution, executionRun?.id, executionRun?.status]);
 
   const updateIssue = async (patch: Partial<FeedbackIssue>) => {
     if (!selectedIssue) return;
@@ -303,7 +476,8 @@ const AdminFeedbackPage: React.FC = () => {
         body: JSON.stringify({ revision_note: revisionNote }),
       });
       const payload = await readJson(response);
-      setWorkPlan(payload.work_plan);
+      setWorkPlan(payload.work_plan || null);
+      setCodexInvestigation(payload.codex_investigation || null);
       applyIssueUpdate(payload.issue);
       setRevisionNote('');
       setEditingPlan(false);
@@ -334,18 +508,56 @@ const AdminFeedbackPage: React.FC = () => {
 
   const queueWorkPlan = async () => {
     if (!selectedIssue || !workPlan || planning) return;
-    if (!window.confirm('确认将此方案放入 Codex 执行队列？当前不会直接修改服务器。')) return;
+    if (!window.confirm('确认启动受控 Codex？它只会在独立 Git worktree 中修改并生成候选提交，不会部署；主仓库不干净或基线漂移时会拒绝启动。')) return;
     setPlanning(true);
     setError('');
     try {
-      const response = await fetch(`/api/admin/feedback/issues/${selectedIssue.id}/work-plan/queue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const response = await fetch(`/api/admin/feedback/issues/${selectedIssue.id}/work-plan/queue`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-LabelSystem-Action': 'controlled-feedback' }, body: JSON.stringify({}) });
       const payload = await readJson(response);
       setWorkPlan(payload.work_plan);
+      setExecutionRun(payload.execution || null);
+      setExecutionEvents('');
+      setExecutionEventOffset(0);
+      setExecutionSummary('');
+      setExecutionTab('events');
     } catch (err) {
       setError(err instanceof Error ? err.message : '进入执行队列失败');
     } finally {
       setPlanning(false);
     }
+  };
+
+  const executionAction = async (path: string, body: Record<string, unknown> = {}) => {
+    if (!executionRun || planning) return;
+    setPlanning(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/admin/feedback/executions/${executionRun.id}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-LabelSystem-Action': 'controlled-feedback' },
+        body: JSON.stringify({ expected_version: executionRun.version, ...body }),
+      });
+      const payload = await readJson(response);
+      if (payload.execution) setExecutionRun(payload.execution);
+      if (payload.work_plan) setWorkPlan(payload.work_plan);
+      if (payload.issue) applyIssueUpdate(payload.issue);
+      if (selectedIssue) await loadWorkPlan(selectedIssue.id);
+    } catch (err) {
+      if (selectedIssue) await loadWorkPlan(selectedIssue.id);
+      setError(err instanceof Error ? err.message : '执行操作失败');
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const stopExecution = () => executionAction('stop');
+  const approveExecution = () => executionAction('review/approve', { review_note: reviewNote });
+  const rejectExecution = () => executionAction('review/reject', { review_note: reviewNote });
+  const reviseExecutionPlan = () => executionAction('revise');
+  const mergeExecution = () => {
+    if (!executionRun?.candidate_sha) return;
+    if (!window.confirm(`确认把候选 ${executionRun.candidate_sha.slice(0, 12)} fast-forward 合入 ${executionRun.target_branch}？这不会发布或重启服务。`)) return;
+    void executionAction('merge', { candidate_sha: executionRun.candidate_sha });
   };
 
   const copyCodexBrief = async () => {
@@ -399,10 +611,19 @@ const AdminFeedbackPage: React.FC = () => {
     setPlanDraft({
       solution_summary: workPlan.proposal.solution_summary || '',
       implementation_steps: [...(workPlan.proposal.implementation_steps || [])],
+      allowed_paths: [...(workPlan.proposal.allowed_paths || [])],
       risks: [...(workPlan.proposal.risks || [])],
       verification_steps: [...(workPlan.proposal.verification_steps || [])],
       execution_scope: workPlan.proposal.execution_scope || 'needs_review',
       codex_brief: workPlan.proposal.codex_brief || '',
+      repository_evidence: [...(workPlan.proposal.repository_evidence || [])],
+      confidence: workPlan.proposal.confidence || 'low',
+      base_sha: workPlan.proposal.base_sha || '',
+      branch: workPlan.proposal.branch || '',
+      dirty_worktree: !!workPlan.proposal.dirty_worktree,
+      clarifying_question: workPlan.proposal.clarifying_question || '',
+      reproducibility: workPlan.proposal.reproducibility || 'production_data_required',
+      data_requirements: workPlan.proposal.data_requirements || '',
     });
     setEditingPlan(true);
   };
@@ -439,6 +660,7 @@ const AdminFeedbackPage: React.FC = () => {
   const maxCategory = Math.max(1, ...categoryEntries.map(([, count]) => count));
   const maxStatus = Math.max(1, ...statusEntries.map(([, count]) => count));
   const maxUserSessions = Math.max(1, ...activeUsers.map(item => item.session_count));
+  const investigationActive = ['pending', 'running'].includes(codexInvestigation?.status || '');
 
   return (
     <div className={`admin-feedback${readOnly ? ' is-read-only' : ''}`}>
@@ -464,11 +686,17 @@ const AdminFeedbackPage: React.FC = () => {
       <section className="admin-feedback__section-title">
         <div>
           <strong>一线反馈概览</strong>
-          <span>按账号留存，对话与问题单分层管理</span>
+          <span>
+            对话 {overview?.summary.sessions ?? '-'} · 问题 {overview?.summary.issues ?? '-'} · 待处理 {overview?.summary.open_issues ?? '-'}
+          </span>
         </div>
-        <span>{readOnly ? '可审方案、确认队列；不能修改系统权限' : '可管理：状态、优先级与内部备注'}</span>
+        <div className="admin-feedback__overview-actions">
+          <span>{readOnly ? '可审方案、确认队列；不能修改系统权限' : '可管理：状态、优先级与内部备注'}</span>
+          <button onClick={() => setOverviewExpanded(current => !current)}>{overviewExpanded ? '收起概览' : '展开概览'}</button>
+        </div>
       </section>
 
+      {overviewExpanded && <>
       <section className="admin-feedback__summary" aria-label="反馈概览">
         <div><span>对话</span><strong>{overview?.summary.sessions ?? '-'}</strong><small>医生反馈线程</small></div>
         <div><span>消息</span><strong>{overview?.summary.messages ?? '-'}</strong><small>上下文记录</small></div>
@@ -525,6 +753,7 @@ const AdminFeedbackPage: React.FC = () => {
           </div>
         </div>
       </section>
+      </>}
 
       <section className="admin-feedback__filters">
         <FaFilter />
@@ -540,8 +769,8 @@ const AdminFeedbackPage: React.FC = () => {
           <option value="">全部状态</option>
           {Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select>
-        <input type="date" value={start} onChange={event => setStart(event.target.value)} title="开始日期" />
-        <input type="date" value={end} onChange={event => setEnd(event.target.value)} title="结束日期" />
+        <input type="date" value={start} onChange={event => setStart(event.target.value)} title={view === 'sessions' ? '会话创建开始日期' : '问题创建开始日期'} />
+        <input type="date" value={end} onChange={event => setEnd(event.target.value)} title={view === 'sessions' ? '会话创建结束日期' : '问题创建结束日期'} />
         <input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索标题或摘要" disabled={view === 'sessions'} />
       </section>
 
@@ -564,7 +793,7 @@ const AdminFeedbackPage: React.FC = () => {
           ))}
           {!loading && view === 'sessions' && sessions.map(session => (
             <button key={session.id} className={selectedSession?.id === session.id ? 'is-active' : ''} onClick={() => void openSession(session)}>
-              <div><span><FaComments /> {session.username}</span><time>{formatTime(session.last_message_at)}</time></div>
+              <div><span><FaComments /> {session.username}</span><time title="医生最后反馈时间">医生最后反馈 {formatTime(session.last_user_message_at)}</time></div>
               <strong>{session.title}</strong>
               <p>创建于 {formatTime(session.created_at)}</p>
             </button>
@@ -618,14 +847,31 @@ const AdminFeedbackPage: React.FC = () => {
               )}
               <section className="admin-feedback__work-plan">
                 <div className="admin-feedback__work-plan-head">
-                  <div><FaClipboardCheck /><strong>解决方案与执行控制</strong></div>
-                  {workPlan && <span className={`is-${workPlan.status}`}>{workPlanStatusLabels[workPlan.status] || workPlan.status}</span>}
+                  <div><FaClipboardCheck /><strong>仓库调查、方案与执行控制</strong></div>
+                  {workPlan
+                    ? <span className={`is-${workPlan.status}`}>{workPlanStatusLabels[workPlan.status] || workPlan.status}</span>
+                    : codexInvestigation && <span className={`is-${codexInvestigation.status}`}>{codexInvestigationStatusLabels[codexInvestigation.status] || codexInvestigation.status}</span>}
                 </div>
                 {!workPlan && (
                   <div className="admin-feedback__work-plan-empty">
-                    <p>尚未生成方案。系统会基于问题单输出处理建议、风险、验证方法和 Codex 任务书。</p>
+                    {investigationActive ? (
+                      <div className="admin-feedback__codex-progress">
+                        <FaSyncAlt />
+                        <div>
+                          <strong>{codexInvestigation?.status === 'pending' ? '等待只读 Codex 调查' : 'Codex 正在读取真实工作站仓库'}</strong>
+                          <p>系统会检索前后端调用链，并返回带文件和行号证据的方案。页面会自动刷新。</p>
+                        </div>
+                      </div>
+                    ) : codexInvestigation?.status === 'failed' ? (
+                      <div className="admin-feedback__codex-failure">
+                        <strong>上次仓库调查未完成</strong>
+                        <p>{codexInvestigation.error_message || 'Codex CLI 暂时不可用，请重新发起。'}</p>
+                      </div>
+                    ) : (
+                      <p>尚未形成仓库方案。发起后，Codex 会只读检查真实代码并输出文件、行号、根因、风险和验证方法。</p>
+                    )}
                     {canOperatePlans && <label className="admin-feedback__revision-note">生成说明（可选）<textarea rows={2} value={revisionNote} onChange={event => setRevisionNote(event.target.value)} placeholder="例如：目标是实验结果页，不是 AI 专家侧栏；请按此重新理解。" /></label>}
-                    {canOperatePlans && <button onClick={() => void generateWorkPlan()} disabled={planning}>{planning ? '正在生成...' : '生成解决方案'}</button>}
+                    {canOperatePlans && !investigationActive && <button onClick={() => void generateWorkPlan()} disabled={planning}>{planning ? '正在入队...' : codexInvestigation?.status === 'failed' ? '重新调查仓库' : '启动 Codex 仓库调查'}</button>}
                   </div>
                 )}
                 {workPlan && (
@@ -634,6 +880,7 @@ const AdminFeedbackPage: React.FC = () => {
                       <section className="admin-feedback__plan-editor">
                         <label>方案摘要<textarea rows={4} value={planDraft.solution_summary || ''} onChange={event => setPlanDraft(current => ({ ...current, solution_summary: event.target.value }))} /></label>
                         <label>建议处理（每行一步）<textarea rows={5} value={(planDraft.implementation_steps || []).join('\n')} onChange={event => setPlanDraft(current => ({ ...current, implementation_steps: event.target.value.split('\n').filter(Boolean) }))} /></label>
+                        <label>允许 Codex 修改的文件（每行一个仓库相对路径）<textarea rows={4} value={(planDraft.allowed_paths || []).join('\n')} onChange={event => setPlanDraft(current => ({ ...current, allowed_paths: event.target.value.split('\n').map(item => item.trim()).filter(Boolean) }))} /></label>
                         <label>风险与控制（每行：等级 | 风险 | 缓解方式）<textarea rows={5} value={formatRisks(planDraft.risks)} onChange={event => setPlanDraft(current => ({ ...current, risks: parseRisks(event.target.value) }))} /></label>
                         <label>验证方式（每行一步）<textarea rows={4} value={(planDraft.verification_steps || []).join('\n')} onChange={event => setPlanDraft(current => ({ ...current, verification_steps: event.target.value.split('\n').filter(Boolean) }))} /></label>
                         <label>Codex 执行任务书<textarea rows={7} value={planDraft.codex_brief || ''} onChange={event => setPlanDraft(current => ({ ...current, codex_brief: event.target.value }))} /></label>
@@ -642,6 +889,27 @@ const AdminFeedbackPage: React.FC = () => {
                     ) : (
                     <>
                     <p className="admin-feedback__solution-summary">{workPlan.proposal.solution_summary || '暂无方案摘要。'}</p>
+                    <div className="admin-feedback__allowed-paths">
+                      <h3>冻结的可写文件范围</h3>
+                      {(workPlan.proposal.allowed_paths || []).length
+                        ? <ul>{workPlan.proposal.allowed_paths?.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+                        : <p>尚未冻结文件范围；该方案不能进入受控执行，请重新调查。</p>}
+                    </div>
+                    {!!workPlan.proposal.repository_evidence?.length && (
+                      <div className="admin-feedback__repository-evidence">
+                        <div>
+                          <h3>真实仓库证据</h3>
+                          <span>置信度 {workPlan.proposal.confidence || '待确认'} · 基线 {(workPlan.proposal.base_sha || '').slice(0, 12) || '未知'}{workPlan.proposal.dirty_worktree ? ' · 含未提交改动' : ''}</span>
+                        </div>
+                        <ul>
+                          {workPlan.proposal.repository_evidence.map((item, index) => (
+                            <li key={`${item.path}-${item.line_start}-${index}`}><code>{item.path}:{item.line_start}</code><span>{item.reason}</span></li>
+                          ))}
+                        </ul>
+                        <p><strong>复现边界：</strong>{workPlan.proposal.reproducibility === 'code_only' ? '仅凭代码即可判断' : workPlan.proposal.reproducibility === 'demo_cases' ? '可用 2–5 个 demo case 复现' : '需要生产数据或运行证据'}{workPlan.proposal.data_requirements ? ` · ${workPlan.proposal.data_requirements}` : ''}</p>
+                        {workPlan.proposal.clarifying_question && <p><strong>仍需确认：</strong>{workPlan.proposal.clarifying_question}</p>}
+                      </div>
+                    )}
                     <div className="admin-feedback__plan-columns">
                       <div>
                         <h3>建议处理</h3>
@@ -666,11 +934,61 @@ const AdminFeedbackPage: React.FC = () => {
                     </div>
                     <div className="admin-feedback__work-plan-actions">
                       {canOperatePlans && workPlan.status === 'draft' && <button onClick={() => void approveWorkPlan()} disabled={planning}><FaClipboardCheck /> 确认方案</button>}
-                      {canOperatePlans && workPlan.status === 'approved' && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 进入 Codex 执行队列</button>}
+                      {canControlExecution && executionCapability && workPlan.status === 'approved' && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 启动受控 Codex</button>}
+                      {canControlExecution && executionCapability && workPlan.status === 'queued' && !executionRun && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 接入受控执行</button>}
+                      {canControlExecution && executionCapability && workPlan.status === 'queued' && executionRun && ['failed', 'stopped'].includes(executionRun.status) && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 重新执行</button>}
                       {canOperatePlans && workPlan.status === 'draft' && <button className="is-secondary" onClick={beginPlanEdit} disabled={planning}>编辑方案</button>}
-                      {canOperatePlans && workPlan.status !== 'queued' && <button className="is-secondary" onClick={() => void generateWorkPlan()} disabled={planning}>{planning ? '正在生成...' : '重新生成'}</button>}
-                      {workPlan.status === 'queued' && <span>已批准，等待受控 Codex 执行器接入；不会直接修改服务器。</span>}
+                      {canOperatePlans && workPlan.status === 'draft' && <button className="is-secondary" onClick={() => void generateWorkPlan()} disabled={planning || investigationActive}>{investigationActive ? '仓库调查中...' : planning ? '正在入队...' : '重新调查仓库'}</button>}
+                      {workPlan.status === 'queued' && !executionRun && <span>这是旧版占位队列记录；管理员可在代码基线干净后启动受控执行。</span>}
+                      {canControlExecution && !executionCapability && <span>受控执行后端尚未激活；当前按钮已安全隐藏。</span>}
                     </div>
+                    {executionRun && (
+                      <section className="admin-feedback__execution">
+                        <div className="admin-feedback__execution-head">
+                          <div>
+                            <strong>受控执行 #{executionRun.id}</strong>
+                            <span>{executionStatusLabels[executionRun.status] || executionRun.status} · {executionRun.phase}</span>
+                          </div>
+                          <div>
+                            <code>base {executionRun.base_sha.slice(0, 12)}</code>
+                            {executionRun.candidate_sha && <code>candidate {executionRun.candidate_sha.slice(0, 12)}</code>}
+                          </div>
+                        </div>
+                        <dl className="admin-feedback__execution-meta">
+                          <dt>目标分支</dt><dd>{executionRun.target_branch}</dd>
+                          <dt>改动文件</dt><dd>{executionRun.changed_file_count || 0}</dd>
+                          <dt>固定验证</dt><dd>{executionRun.tests_passed == null ? '尚未完成' : executionRun.tests_passed ? '全部通过' : '未通过'}</dd>
+                          <dt>更新时间</dt><dd>{formatTime(executionRun.updated_at)}</dd>
+                          {executionRun.artifact_dir && <><dt>审计目录</dt><dd><code>{executionRun.artifact_dir}</code></dd></>}
+                          {executionRun.worktree_path && <><dt>独立工作树</dt><dd><code>{executionRun.worktree_path}</code></dd></>}
+                        </dl>
+                        {executionRun.error_message && <div className="admin-feedback__execution-error">{executionRun.error_message}</div>}
+                        <div className="admin-feedback__execution-tabs">
+                          <button className={executionTab === 'events' ? 'is-active' : ''} onClick={() => setExecutionTab('events')}>实时记录</button>
+                          <button className={executionTab === 'diff' ? 'is-active' : ''} onClick={() => setExecutionTab('diff')}>代码改动</button>
+                          <button className={executionTab === 'tests' ? 'is-active' : ''} onClick={() => setExecutionTab('tests')}>测试结果</button>
+                          <button className={executionTab === 'review' ? 'is-active' : ''} onClick={() => setExecutionTab('review')}>人工审查</button>
+                        </div>
+                        {executionTab === 'events' && <div className="admin-feedback__execution-log"><pre>{executionEvents || '等待执行事件…'}</pre>{executionSummary && <><h4>Codex 总结</h4><pre>{executionSummary}</pre></>}</div>}
+                        {executionTab === 'diff' && <div className="admin-feedback__execution-log"><pre>{executionDiff.stat || '候选改动尚未生成。'}</pre><pre>{executionDiff.unified_diff}</pre></div>}
+                        {executionTab === 'tests' && <div className="admin-feedback__execution-tests">
+                          {(executionRun.tests?.commands || []).map(test => <div key={test.id} className={test.passed ? 'is-passed' : 'is-failed'}><strong>{test.passed ? '通过' : '失败'} · {test.id}</strong><code>{(test.command || []).join(' ')}</code>{test.error && <span>{test.error}</span>}</div>)}
+                          {!(executionRun.tests?.commands || []).length && <p>固定验证尚未运行。</p>}
+                        </div>}
+                        {executionTab === 'review' && <div className="admin-feedback__execution-review">
+                          <label>审查备注<textarea rows={3} value={reviewNote} onChange={event => setReviewNote(event.target.value)} placeholder="记录批准依据，或填写拒绝原因。" /></label>
+                          {executionRun.reviewed_by && <p>上次审查：{executionRun.reviewed_by} · {formatTime(executionRun.reviewed_at)}{executionRun.review_note ? ` · ${executionRun.review_note}` : ''}</p>}
+                          <p>批准实际代码改动与批准解决方案是两次独立确认；合并后仍不会发布。</p>
+                        </div>}
+                        {canControlExecution && <div className="admin-feedback__execution-actions">
+                          {['queued', 'preparing', 'running'].includes(executionRun.status) && <button className="is-danger" onClick={() => void stopExecution()} disabled={planning}>停止执行</button>}
+                          {executionRun.status === 'review_ready' && <button onClick={() => void approveExecution()} disabled={planning || executionRun.tests_passed !== true}>批准实际改动</button>}
+                          {['review_ready', 'review_approved'].includes(executionRun.status) && <button className="is-danger" onClick={() => void rejectExecution()} disabled={planning || !reviewNote.trim()}>拒绝改动</button>}
+                          {['failed', 'stopped'].includes(executionRun.status) && <button className="is-secondary" onClick={() => void reviseExecutionPlan()} disabled={planning}>退回方案修订</button>}
+                          {executionRun.status === 'review_approved' && <button onClick={mergeExecution} disabled={planning || executionRun.tests_passed !== true || !executionRun.candidate_sha}>合并候选提交</button>}
+                        </div>}
+                      </section>
+                    )}
                     {canOperatePlans && workPlan.status === 'draft' && <label className="admin-feedback__revision-note">要求 AI 重新生成时的修订说明<textarea rows={2} value={revisionNote} onChange={event => setRevisionNote(event.target.value)} placeholder="指出方案误解的范围、遗漏的风险或希望采用的方向。" /></label>}
                     </>
                     )}
