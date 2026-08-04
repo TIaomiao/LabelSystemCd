@@ -129,6 +129,49 @@ class FeedbackExecutionWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(running.finished_at)
             self.assertEqual(completed.status, 'completed')
 
+    def test_plan_review_history_is_ordered_and_excludes_current_run(self):
+        with self.app.app_context():
+            issue = FeedbackIssue(
+                session_id=self.session_id,
+                reporter_id=self.user_id,
+                category='bug',
+                title='continued review',
+            )
+            db.session.add(issue)
+            db.session.flush()
+            first = FeedbackCodexRun(
+                issue_id=issue.id,
+                initiated_by_id=self.user_id,
+                status='completed',
+                phase='investigation',
+                revision_note='先检查前端刷新',
+                result_json={'investigation_summary': '第一轮'},
+            )
+            failed = FeedbackCodexRun(
+                issue_id=issue.id,
+                initiated_by_id=self.user_id,
+                status='failed',
+                phase='investigation',
+                revision_note='失败轮次',
+            )
+            current = FeedbackCodexRun(
+                issue_id=issue.id,
+                initiated_by_id=self.user_id,
+                status='pending',
+                phase='investigation',
+                revision_note='不要改 importer',
+            )
+            db.session.add_all([first, failed, current])
+            db.session.commit()
+
+            visible = routes._feedback_codex_history(issue.id)
+            prompt_history = routes._feedback_codex_prompt_history(issue.id, current.id)
+
+            self.assertEqual([item.id for item in visible], [first.id, failed.id, current.id])
+            self.assertEqual(len(prompt_history), 1)
+            self.assertEqual(prompt_history[0]['administrator_message'], '先检查前端刷新')
+            self.assertEqual(prompt_history[0]['assistant_result']['investigation_summary'], '第一轮')
+
     def test_queue_freezes_plan_snapshot_and_starts_one_worker(self):
         with self.app.app_context():
             issue, plan = self._issue_and_plan({

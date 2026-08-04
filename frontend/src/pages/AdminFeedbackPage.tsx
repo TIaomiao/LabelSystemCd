@@ -74,6 +74,7 @@ interface FeedbackWorkPlan {
   status: 'draft' | 'approved' | 'queued' | 'verified' | string;
   proposal: {
     solution_summary?: string;
+    root_cause?: string;
     implementation_steps?: string[];
     allowed_paths?: string[];
     risks?: { level?: string; risk?: string; mitigation?: string }[];
@@ -96,11 +97,26 @@ interface FeedbackWorkPlan {
   execution_note?: string;
 }
 
+interface FeedbackCodexResult {
+  investigation_summary?: string;
+  root_cause?: string;
+  confidence?: 'high' | 'medium' | 'low' | string;
+  recommended_changes?: { path?: string; change?: string; rationale?: string }[];
+  risks?: { level?: string; risk?: string; mitigation?: string }[];
+  verification_steps?: string[];
+  execution_scope?: string;
+  reproducibility?: string;
+  data_requirements?: string;
+  clarifying_question?: string;
+}
+
 interface FeedbackCodexRun {
   id: number;
   issue_id: number;
   status: 'pending' | 'running' | 'completed' | 'failed' | string;
   phase: string;
+  revision_note?: string;
+  result?: FeedbackCodexResult;
   base_sha?: string;
   branch?: string;
   dirty_worktree?: boolean;
@@ -197,6 +213,14 @@ const codexInvestigationStatusLabels: Record<string, string> = {
   failed: '仓库调查失败',
 };
 
+const confidenceLabels: Record<string, string> = { high: '高', medium: '中', low: '低' };
+
+const reproducibilityLabels: Record<string, string> = {
+  code_only: '仅凭代码即可判断',
+  demo_cases: '可用 2–5 个 demo case 复现',
+  production_data_required: '需要生产数据或运行证据',
+};
+
 const readJson = async (response: Response) => {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || '请求失败');
@@ -231,6 +255,7 @@ const AdminFeedbackPage: React.FC = () => {
   const [messages, setMessages] = useState<FeedbackMessage[]>([]);
   const [workPlan, setWorkPlan] = useState<FeedbackWorkPlan | null>(null);
   const [codexInvestigation, setCodexInvestigation] = useState<FeedbackCodexRun | null>(null);
+  const [investigationHistory, setInvestigationHistory] = useState<FeedbackCodexRun[]>([]);
   const [executionRun, setExecutionRun] = useState<FeedbackExecutionRun | null>(null);
   const [executionCapability, setExecutionCapability] = useState(false);
   const [executionEvents, setExecutionEvents] = useState('');
@@ -345,6 +370,7 @@ const AdminFeedbackPage: React.FC = () => {
       if (selectedIssueIdRef.current !== issueId) return;
       setWorkPlan(payload.work_plan || null);
       setCodexInvestigation(payload.codex_investigation || null);
+      setInvestigationHistory(payload.investigation_history || []);
       setExecutionRun(payload.execution || null);
       setExecutionCapability(payload.execution_capability?.enabled === true);
     } catch (err) {
@@ -357,6 +383,7 @@ const AdminFeedbackPage: React.FC = () => {
     if (!selectedIssue) {
       setWorkPlan(null);
       setCodexInvestigation(null);
+      setInvestigationHistory([]);
       setExecutionRun(null);
       setExecutionCapability(false);
       setExecutionEvents('');
@@ -365,12 +392,15 @@ const AdminFeedbackPage: React.FC = () => {
       setExecutionDiff({ files: [], unified_diff: '', stat: '' });
       setEditingIssue(false);
       setEditingPlan(false);
+      setRevisionNote('');
       return;
     }
     setEditingIssue(false);
     setEditingPlan(false);
+    setRevisionNote('');
     setIssueDraft({});
     setCodexInvestigation(null);
+    setInvestigationHistory([]);
     setExecutionRun(null);
     setExecutionCapability(false);
     setExecutionEvents('');
@@ -478,6 +508,12 @@ const AdminFeedbackPage: React.FC = () => {
       const payload = await readJson(response);
       setWorkPlan(payload.work_plan || null);
       setCodexInvestigation(payload.codex_investigation || null);
+      if (payload.codex_investigation) {
+        setInvestigationHistory(current => [
+          ...current.filter(item => item.id !== payload.codex_investigation.id),
+          payload.codex_investigation,
+        ]);
+      }
       applyIssueUpdate(payload.issue);
       setRevisionNote('');
       setEditingPlan(false);
@@ -610,6 +646,7 @@ const AdminFeedbackPage: React.FC = () => {
     if (!workPlan) return;
     setPlanDraft({
       solution_summary: workPlan.proposal.solution_summary || '',
+      root_cause: workPlan.proposal.root_cause || '',
       implementation_steps: [...(workPlan.proposal.implementation_steps || [])],
       allowed_paths: [...(workPlan.proposal.allowed_paths || [])],
       risks: [...(workPlan.proposal.risks || [])],
@@ -661,6 +698,21 @@ const AdminFeedbackPage: React.FC = () => {
   const maxStatus = Math.max(1, ...statusEntries.map(([, count]) => count));
   const maxUserSessions = Math.max(1, ...activeUsers.map(item => item.session_count));
   const investigationActive = ['pending', 'running'].includes(codexInvestigation?.status || '');
+  const displayedInvestigationHistory = useMemo(() => {
+    if (!codexInvestigation || investigationHistory.some(item => item.id === codexInvestigation.id)) {
+      return investigationHistory;
+    }
+    return [...investigationHistory, codexInvestigation];
+  }, [codexInvestigation, investigationHistory]);
+  const legacyRootCauseMarker = '\n\n根因判断：';
+  const rawPlanSummary = workPlan?.proposal.solution_summary || '';
+  const planSummary = rawPlanSummary.includes(legacyRootCauseMarker)
+    ? rawPlanSummary.slice(0, rawPlanSummary.indexOf(legacyRootCauseMarker))
+    : rawPlanSummary;
+  const planRootCause = workPlan?.proposal.root_cause
+    || (rawPlanSummary.includes(legacyRootCauseMarker)
+      ? rawPlanSummary.slice(rawPlanSummary.indexOf(legacyRootCauseMarker) + legacyRootCauseMarker.length)
+      : '当前方案未单独记录根因，请在方案对话中要求 Codex 重新核对。');
 
   return (
     <div className={`admin-feedback${readOnly ? ' is-read-only' : ''}`}>
@@ -852,33 +904,67 @@ const AdminFeedbackPage: React.FC = () => {
                     ? <span className={`is-${workPlan.status}`}>{workPlanStatusLabels[workPlan.status] || workPlan.status}</span>
                     : codexInvestigation && <span className={`is-${codexInvestigation.status}`}>{codexInvestigationStatusLabels[codexInvestigation.status] || codexInvestigation.status}</span>}
                 </div>
-                {!workPlan && (
-                  <div className="admin-feedback__work-plan-empty">
-                    {investigationActive ? (
-                      <div className="admin-feedback__codex-progress">
-                        <FaSyncAlt />
-                        <div>
-                          <strong>{codexInvestigation?.status === 'pending' ? '等待只读 Codex 调查' : 'Codex 正在读取真实工作站仓库'}</strong>
-                          <p>系统会检索前后端调用链，并返回带文件和行号证据的方案。页面会自动刷新。</p>
-                        </div>
-                      </div>
-                    ) : codexInvestigation?.status === 'failed' ? (
-                      <div className="admin-feedback__codex-failure">
-                        <strong>上次仓库调查未完成</strong>
-                        <p>{codexInvestigation.error_message || 'Codex CLI 暂时不可用，请重新发起。'}</p>
-                      </div>
-                    ) : (
-                      <p>尚未形成仓库方案。发起后，Codex 会只读检查真实代码并输出文件、行号、根因、风险和验证方法。</p>
-                    )}
-                    {canOperatePlans && <label className="admin-feedback__revision-note">生成说明（可选）<textarea rows={2} value={revisionNote} onChange={event => setRevisionNote(event.target.value)} placeholder="例如：目标是实验结果页，不是 AI 专家侧栏；请按此重新理解。" /></label>}
-                    {canOperatePlans && !investigationActive && <button onClick={() => void generateWorkPlan()} disabled={planning}>{planning ? '正在入队...' : codexInvestigation?.status === 'failed' ? '重新调查仓库' : '启动 Codex 仓库调查'}</button>}
+                <section className="admin-feedback__plan-chat">
+                  <div className="admin-feedback__plan-chat-head">
+                    <div><FaComments /><strong>方案协作对话</strong></div>
+                    <span>Codex 会带着前几轮结论继续核对真实仓库</span>
                   </div>
-                )}
+                  {!displayedInvestigationHistory.length && (
+                    <p className="admin-feedback__plan-chat-empty">还没有调查记录。你可以直接说明希望 Codex 重点核对什么，也可以留空开始第一轮只读调查。</p>
+                  )}
+                  <div className="admin-feedback__plan-chat-turns">
+                    {displayedInvestigationHistory.map((run, index) => (
+                      <React.Fragment key={run.id}>
+                        {run.revision_note && (
+                          <article className="admin-feedback__plan-chat-message is-user">
+                            <header><strong>你</strong><span>第 {index + 1} 轮 · {formatTime(run.created_at)}</span></header>
+                            <p>{run.revision_note}</p>
+                          </article>
+                        )}
+                        <article className={`admin-feedback__plan-chat-message is-codex is-${run.status}`}>
+                          <header><strong>受控 Codex</strong><span>{codexInvestigationStatusLabels[run.status] || run.status} · #{run.id}</span></header>
+                          {['pending', 'running'].includes(run.status) ? (
+                            <p>{run.status === 'pending' ? '正在等待调查资源…' : '正在读取仓库并核对这一轮意见，完成后页面会自动更新。'}</p>
+                          ) : run.status === 'failed' ? (
+                            <p>{run.error_message || '本轮调查未完成，可以直接再次发送意见重试。'}</p>
+                          ) : (
+                            <>
+                              <p>{run.result?.investigation_summary || '本轮调查已完成，最新结构化方案见下方。'}</p>
+                              {(run.result?.root_cause || run.result?.recommended_changes?.length || run.result?.clarifying_question) && (
+                                <details>
+                                  <summary>查看本轮依据与变化</summary>
+                                  {run.result?.root_cause && <p><strong>根因判断：</strong>{run.result.root_cause}</p>}
+                                  {!!run.result?.recommended_changes?.length && <ul>{run.result.recommended_changes.map((item, changeIndex) => <li key={`${run.id}-${item.path}-${changeIndex}`}><code>{item.path}</code>：{item.change}</li>)}</ul>}
+                                  {run.result?.clarifying_question && <p><strong>仍需确认：</strong>{run.result.clarifying_question}</p>}
+                                </details>
+                              )}
+                            </>
+                          )}
+                        </article>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  {canOperatePlans && (!workPlan || workPlan.status === 'draft') && (
+                    <div className="admin-feedback__plan-chat-composer">
+                      <label>继续告诉 Codex 你的判断或限制
+                        <textarea rows={3} value={revisionNote} onChange={event => setRevisionNote(event.target.value)} placeholder="例如：先不要改 importer，只处理补打标签后的前端状态刷新；请说明这样是否足以解决 Function SAX 和 Tissue LGE。" />
+                      </label>
+                      <div>
+                        <small>这条消息会和前几轮调查结论一起送给 Codex，不会写进医生的原始对话。</small>
+                        <button onClick={() => void generateWorkPlan()} disabled={planning || investigationActive || (!!displayedInvestigationHistory.length && !revisionNote.trim())}>
+                          {investigationActive ? '调查进行中…' : planning ? '正在发送…' : displayedInvestigationHistory.length ? '发送并继续调查' : '开始只读调查'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {workPlan && workPlan.status !== 'draft' && <p className="admin-feedback__plan-chat-locked">方案已批准。若要继续讨论，需要先明确退回草案，避免已批准内容在执行前被悄悄改变。</p>}
+                </section>
                 {workPlan && (
                   <div className="admin-feedback__work-plan-content">
                     {editingPlan ? (
                       <section className="admin-feedback__plan-editor">
                         <label>方案摘要<textarea rows={4} value={planDraft.solution_summary || ''} onChange={event => setPlanDraft(current => ({ ...current, solution_summary: event.target.value }))} /></label>
+                        <label>根因判断<textarea rows={4} value={planDraft.root_cause || ''} onChange={event => setPlanDraft(current => ({ ...current, root_cause: event.target.value }))} /></label>
                         <label>建议处理（每行一步）<textarea rows={5} value={(planDraft.implementation_steps || []).join('\n')} onChange={event => setPlanDraft(current => ({ ...current, implementation_steps: event.target.value.split('\n').filter(Boolean) }))} /></label>
                         <label>允许 Codex 修改的文件（每行一个仓库相对路径）<textarea rows={4} value={(planDraft.allowed_paths || []).join('\n')} onChange={event => setPlanDraft(current => ({ ...current, allowed_paths: event.target.value.split('\n').map(item => item.trim()).filter(Boolean) }))} /></label>
                         <label>风险与控制（每行：等级 | 风险 | 缓解方式）<textarea rows={5} value={formatRisks(planDraft.risks)} onChange={event => setPlanDraft(current => ({ ...current, risks: parseRisks(event.target.value) }))} /></label>
@@ -888,7 +974,19 @@ const AdminFeedbackPage: React.FC = () => {
                       </section>
                     ) : (
                     <>
-                    <p className="admin-feedback__solution-summary">{workPlan.proposal.solution_summary || '暂无方案摘要。'}</p>
+                    <div className="admin-feedback__plan-verdict">
+                      <span>当前结论</span>
+                      <p>{planSummary || '暂无方案摘要。'}</p>
+                      <div>
+                        <span>置信度：{confidenceLabels[workPlan.proposal.confidence || 'low'] || '待确认'}</span>
+                        <span>范围：{scopeLabels[workPlan.proposal.execution_scope || 'needs_review'] || '需人工评估'}</span>
+                        <span>{reproducibilityLabels[workPlan.proposal.reproducibility || 'production_data_required']}</span>
+                      </div>
+                    </div>
+                    <div className="admin-feedback__root-cause"><strong>为什么会发生</strong><p>{planRootCause}</p></div>
+                    {workPlan.proposal.clarifying_question && <div className="admin-feedback__plan-question"><strong>需要你确认</strong><p>{workPlan.proposal.clarifying_question}</p></div>}
+                    <details className="admin-feedback__plan-technical">
+                      <summary>查看代码证据与冻结的文件范围</summary>
                     <div className="admin-feedback__allowed-paths">
                       <h3>冻结的可写文件范围</h3>
                       {(workPlan.proposal.allowed_paths || []).length
@@ -907,9 +1005,9 @@ const AdminFeedbackPage: React.FC = () => {
                           ))}
                         </ul>
                         <p><strong>复现边界：</strong>{workPlan.proposal.reproducibility === 'code_only' ? '仅凭代码即可判断' : workPlan.proposal.reproducibility === 'demo_cases' ? '可用 2–5 个 demo case 复现' : '需要生产数据或运行证据'}{workPlan.proposal.data_requirements ? ` · ${workPlan.proposal.data_requirements}` : ''}</p>
-                        {workPlan.proposal.clarifying_question && <p><strong>仍需确认：</strong>{workPlan.proposal.clarifying_question}</p>}
                       </div>
                     )}
+                    </details>
                     <div className="admin-feedback__plan-columns">
                       <div>
                         <h3>建议处理</h3>
@@ -924,21 +1022,23 @@ const AdminFeedbackPage: React.FC = () => {
                         ))}
                       </div>
                     </div>
-                    <div className="admin-feedback__verification">
-                      <h3>验证方式</h3>
-                      <ul>{(workPlan.proposal.verification_steps || []).map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ul>
-                    </div>
-                    <div className="admin-feedback__codex-brief">
-                      <div><h3>Codex 执行任务书</h3><button onClick={() => void copyCodexBrief()} title="复制任务书"><FaCopy /> 复制</button></div>
-                      <pre>{workPlan.proposal.codex_brief}</pre>
-                    </div>
+                    <details className="admin-feedback__plan-technical">
+                      <summary>查看验证步骤与 Codex 执行任务书</summary>
+                      <div className="admin-feedback__verification">
+                        <h3>验证方式</h3>
+                        <ul>{(workPlan.proposal.verification_steps || []).map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}</ul>
+                      </div>
+                      <div className="admin-feedback__codex-brief">
+                        <div><h3>Codex 执行任务书</h3><button onClick={() => void copyCodexBrief()} title="复制任务书"><FaCopy /> 复制</button></div>
+                        <pre>{workPlan.proposal.codex_brief}</pre>
+                      </div>
+                    </details>
                     <div className="admin-feedback__work-plan-actions">
                       {canOperatePlans && workPlan.status === 'draft' && <button onClick={() => void approveWorkPlan()} disabled={planning}><FaClipboardCheck /> 确认方案</button>}
                       {canControlExecution && executionCapability && workPlan.status === 'approved' && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 启动受控 Codex</button>}
                       {canControlExecution && executionCapability && workPlan.status === 'queued' && !executionRun && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 接入受控执行</button>}
                       {canControlExecution && executionCapability && workPlan.status === 'queued' && executionRun && ['failed', 'stopped'].includes(executionRun.status) && <button onClick={() => void queueWorkPlan()} disabled={planning}><FaPlay /> 重新执行</button>}
-                      {canOperatePlans && workPlan.status === 'draft' && <button className="is-secondary" onClick={beginPlanEdit} disabled={planning}>编辑方案</button>}
-                      {canOperatePlans && workPlan.status === 'draft' && <button className="is-secondary" onClick={() => void generateWorkPlan()} disabled={planning || investigationActive}>{investigationActive ? '仓库调查中...' : planning ? '正在入队...' : '重新调查仓库'}</button>}
+                      {canOperatePlans && workPlan.status === 'draft' && <button className="is-secondary" onClick={beginPlanEdit} disabled={planning}>高级结构化编辑</button>}
                       {workPlan.status === 'queued' && !executionRun && <span>这是旧版占位队列记录；管理员可在代码基线干净后启动受控执行。</span>}
                       {canControlExecution && !executionCapability && <span>受控执行后端尚未激活；当前按钮已安全隐藏。</span>}
                     </div>

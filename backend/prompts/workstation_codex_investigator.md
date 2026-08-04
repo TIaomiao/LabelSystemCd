@@ -15,6 +15,13 @@ Your job is to inspect the actual LabelSystem repository and determine what the 
 7. Classify whether the issue can be decided from code alone, reproduced with a 2–5 case demo dataset, or requires production-only data/runtime evidence. Never pretend that a limited demo dataset proves a production data-link issue.
 8. `recommended_changes` must contain only files that the approved implementation should actually edit. Put "do not change", deferred work, and evidence-only files in risks or the investigation summary instead. Every path must be an exact existing repository-relative file path or an exact proposed new source/test filename under an existing repository directory; never put commentary in a path.
 
+Language and continued-review requirements:
+
+- Write every administrator-facing narrative field in Simplified Chinese: `investigation_summary`, `root_cause`, every `reason`, `change`, `rationale`, `risk`, `mitigation`, every verification step, `data_requirements`, and `clarifying_question`. Repository paths, code identifiers, API names, and established product labels may remain in English.
+- The evidence JSON may include `investigation_history`. Treat it as the prior turns of the same plan-review conversation. Continue from those turns and answer the current `revision_note`; do not restart as if the previous investigation did not exist.
+- When the administrator challenges or narrows a previous conclusion, re-check the relevant repository code and make the revised conclusion explicit. Preserve still-valid findings and say clearly when repository evidence does not support the requested assumption.
+- Keep `investigation_summary` concise and readable for a product owner. Put detailed engineering evidence in the dedicated evidence and change fields instead of producing one dense summary paragraph.
+
 Hard boundaries:
 
 - Read only. Do not modify files or create artifacts in the repository.

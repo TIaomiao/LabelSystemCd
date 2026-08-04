@@ -4261,6 +4261,7 @@ def _normalize_feedback_work_plan(raw_text, issue):
         reproducibility = 'production_data_required'
     return {
         'solution_summary': text('solution_summary', '需人工补充解决方案。'),
+        'root_cause': text('root_cause'),
         'implementation_steps': text_list('implementation_steps'),
         'allowed_paths': [
             str(item).strip()[:1000]
@@ -4390,6 +4391,47 @@ def _latest_feedback_codex_run(issue_id):
     )
 
 
+def _feedback_codex_history(issue_id, *, before_run_id=None, limit=8, completed_only=False):
+    query = FeedbackCodexRun.query.filter_by(issue_id=issue_id, phase='investigation')
+    if before_run_id is not None:
+        query = query.filter(FeedbackCodexRun.id < before_run_id)
+    if completed_only:
+        query = query.filter(FeedbackCodexRun.status == 'completed')
+    records = query.order_by(FeedbackCodexRun.id.desc()).limit(max(1, min(int(limit), 12))).all()
+    records.reverse()
+    return records
+
+
+def _feedback_codex_prompt_history(issue_id, current_run_id, limit=5):
+    records = _feedback_codex_history(
+        issue_id,
+        before_run_id=current_run_id,
+        limit=limit,
+        completed_only=True,
+    )
+    history = []
+    for item in records:
+        result = item.result_json or {}
+        history.append({
+            'run_id': item.id,
+            'administrator_message': item.revision_note or '',
+            'assistant_result': {
+                'investigation_summary': result.get('investigation_summary'),
+                'root_cause': result.get('root_cause'),
+                'confidence': result.get('confidence'),
+                'evidence': (result.get('evidence') or [])[:12],
+                'recommended_changes': (result.get('recommended_changes') or [])[:12],
+                'risks': (result.get('risks') or [])[:8],
+                'verification_steps': (result.get('verification_steps') or [])[:10],
+                'execution_scope': result.get('execution_scope'),
+                'reproducibility': result.get('reproducibility'),
+                'data_requirements': result.get('data_requirements'),
+                'clarifying_question': result.get('clarifying_question'),
+            },
+        })
+    return history
+
+
 def _queue_feedback_codex_investigation(issue, initiated_by_id, revision_note=''):
     active = (
         FeedbackCodexRun.query
@@ -4456,6 +4498,7 @@ def _execute_feedback_codex_investigation(app, run_id):
                     _feedback_issue_codex_payload(issue),
                     _feedback_codex_conversation(issue),
                     revision_note=run.revision_note,
+                    investigation_history=_feedback_codex_prompt_history(issue.id, run.id),
                     attachment_paths=attachment_paths,
                     run_dir=artifact_dir,
                 )
@@ -5703,6 +5746,10 @@ def register_routes(app):
         return jsonify({
             'work_plan': plan.to_dict() if plan else None,
             'codex_investigation': investigation.to_dict() if investigation else None,
+            'investigation_history': [
+                item.to_dict()
+                for item in _feedback_codex_history(issue.id, limit=8)
+            ],
             'execution': _execution_to_dict(execution),
             'execution_capability': {
                 'enabled': True,

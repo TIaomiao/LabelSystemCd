@@ -92,6 +92,7 @@ def build_investigation_prompt(
     conversation: Iterable[dict[str, Any]],
     *,
     revision_note: str = '',
+    investigation_history: Iterable[dict[str, Any]] = (),
     snapshot: dict[str, Any] | None = None,
 ) -> str:
     try:
@@ -101,6 +102,7 @@ def build_investigation_prompt(
     evidence_payload = {
         'issue': issue,
         'conversation': list(conversation)[-16:],
+        'investigation_history': list(investigation_history)[-6:],
         'revision_note': str(revision_note or '').strip(),
         'repository': snapshot or repository_snapshot(),
     }
@@ -221,13 +223,20 @@ def run_codex_investigation(
     conversation: Iterable[dict[str, Any]],
     *,
     revision_note: str = '',
+    investigation_history: Iterable[dict[str, Any]] = (),
     attachment_paths: Iterable[str] = (),
     run_dir: Path,
     timeout_seconds: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     run_dir.mkdir(parents=True, exist_ok=True)
     snapshot = repository_snapshot()
-    prompt = build_investigation_prompt(issue, conversation, revision_note=revision_note, snapshot=snapshot)
+    prompt = build_investigation_prompt(
+        issue,
+        conversation,
+        revision_note=revision_note,
+        investigation_history=investigation_history,
+        snapshot=snapshot,
+    )
     prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
     result_path = run_dir / 'result.json'
     events_path = run_dir / 'events.jsonl'
@@ -333,7 +342,8 @@ def investigation_to_proposal(result: dict[str, Any], metadata: dict[str, Any], 
         '批准后仅在独立可写工作树实施；不要修改生产数据、病例、标注、数据库或服务。',
     ])
     return {
-        'solution_summary': f'{summary}\n\n根因判断：{root_cause}',
+        'solution_summary': summary,
+        'root_cause': root_cause,
         'implementation_steps': steps,
         'allowed_paths': allowed_paths,
         'risks': result.get('risks', []),
