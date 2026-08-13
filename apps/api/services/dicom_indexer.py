@@ -14,8 +14,19 @@ from pydicom.pixel_data_handlers.util import apply_voi_lut
 from ..db import dumps, get_conn, init_db, loads, utcnow
 
 
+def _contains_surrogate(text: str) -> bool:
+    return any("\udc80" <= char <= "\udcff" for char in text)
+
+
 def _looks_like_dicom_file(path: Path) -> bool:
     if not path.is_file():
+        return False
+    # Some legacy exports contain directory names decoded via Python's
+    # surrogateescape mechanism.  Those paths can be opened by the filesystem,
+    # but cannot be inserted into SQLite TEXT or serialized through JSON as
+    # valid UTF-8.  Import the rest of the study instead of failing the whole
+    # case on those duplicate/broken folders.
+    if _contains_surrogate(str(path)):
         return False
     name = path.name.strip()
     lower = name.lower()
@@ -118,7 +129,7 @@ def list_directories(source_path: str | None, fallback_path: str) -> dict[str, A
 
 
 def _safe_text(value: Any) -> str:
-    return str(value or "").strip()
+    return str(value or "").strip().encode("utf-8", errors="replace").decode("utf-8")
 
 
 def _dicom_value_text(value: Any) -> str:
@@ -145,10 +156,19 @@ def _series_role_token(
     philips_slice_orientation: str = "",
 ) -> str:
     folder = Path(folder_path)
+    folder_parts = [folder.name]
+    for parent in folder.parents:
+        parent_name = parent.name
+        parent_token = parent_name.lower()
+        if _has_any_token(parent_token, LGE_MARKERS + TWO_CH_MARKERS + THREE_CH_MARKERS + FOUR_CH_MARKERS + SAX_MARKERS):
+            folder_parts.append(parent_name)
+            continue
+        break
+    folder_context = " ".join(reversed(folder_parts))
     return " ".join(
         part.lower()
         for part in (
-            folder.name,
+            folder_context,
             description,
             protocol_name,
             image_type,
@@ -464,6 +484,35 @@ def repair_series_roles() -> int:
     return repaired
 
 
+def _series_metadata(row) -> dict[str, Any]:
+    try:
+        metadata = loads(row["metadata_json"], {}) or {}
+    except (TypeError, ValueError):
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _series_detail_sort_key(row) -> tuple[int, int, int, int]:
+    role = str(row["role"] or "unknown")
+    role_order = {
+        "cine_sax": 0,
+        "cine_lax_4ch": 1,
+        "cine_lax_2ch": 2,
+        "cine_lax_3ch": 3,
+        "lge_sax": 4,
+        "lge_lax": 5,
+        "unknown": 6,
+    }.get(role, 7)
+    if role == "cine_sax":
+        # Legacy Kunming imports can contain a 3-slice SAX scout before the real
+        # multi-slice SAX stack. Prefer the fuller stack for default selection.
+        return (role_order, -int(row["slice_count"] or 0), -int(row["file_count"] or 0), int(row["id"]))
+    if role == "lge_sax":
+        primary_order = 0 if _series_metadata(row).get("tissue_lge_primary") is True else 1
+        return (role_order, primary_order, int(row["id"]), 0)
+    return (role_order, int(row["id"]), 0, 0)
+
+
 def _series_group_key(study_uid: str, series_uid: str, file_path: Path, description: str) -> str:
     token = f"{file_path.parent.name} {description}".lower()
     parent_name = file_path.parent.name.lower()
@@ -732,13 +781,14 @@ def _snapshot_existing_study_state(
         (source_path,),
     ).fetchall()
     if not study_rows:
-        return {"contours": {}, "measurements": {}, "report": None}
+        return {"series_states": {}, "contours": {}, "measurements": {}, "report": None}
 
     study_ids = [int(row["id"]) for row in study_rows]
     placeholders = ",".join("?" for _ in study_ids)
     series_rows = conn.execute(
         f"""
-        SELECT id, study_id, series_uid, role, description, slice_count, phase_count, file_count, orientation
+        SELECT id, study_id, series_uid, role, description, slice_count, phase_count, file_count,
+               orientation, metadata_json
         FROM series
         WHERE study_id IN ({placeholders})
         """,
@@ -756,6 +806,7 @@ def _snapshot_existing_study_state(
             study_ids,
         ).fetchone()
         return {
+            "series_states": {},
             "contours": {},
             "measurements": {},
             "report": {key: report_row[key] for key in report_row.keys()} if report_row else None,
@@ -772,6 +823,7 @@ def _snapshot_existing_study_state(
             "phase_count": int(row["phase_count"] or 0),
             "file_count": int(row["file_count"] or 0),
             "orientation": row["orientation"] or "",
+            "metadata": _series_metadata(row),
         }
         for row in series_rows
     }
@@ -830,7 +882,24 @@ def _snapshot_existing_study_state(
         measurements[(series_meta["series_uid"], row["module"])] = measurement
         measurement_fallbacks.append({**series_meta, "module": row["module"], **measurement})
 
+    primary_series_uid = next(
+        (
+            item["series_uid"]
+            for item in series_meta_by_id.values()
+            if item["role"] == "lge_sax" and item["metadata"].get("tissue_lge_primary") is True
+        ),
+        None,
+    )
+    series_states = {
+        item["series_uid"]: {
+            "role": item["role"],
+            "is_tissue_lge_primary": item["series_uid"] == primary_series_uid,
+        }
+        for item in series_meta_by_id.values()
+    }
+
     return {
+        "series_states": series_states,
         "contours": contours,
         "contour_fallbacks": contour_fallbacks,
         "measurements": measurements,
@@ -881,7 +950,8 @@ def _restore_study_state(conn, *, study_id: int, snapshot: dict[str, Any]) -> No
 
     series_rows = conn.execute(
         """
-        SELECT id, series_uid, role, description, slice_count, phase_count, file_count, orientation
+        SELECT id, series_uid, role, description, slice_count, phase_count, file_count,
+               orientation, metadata_json
         FROM series
         WHERE study_id = ?
         """,
@@ -889,11 +959,32 @@ def _restore_study_state(conn, *, study_id: int, snapshot: dict[str, Any]) -> No
     ).fetchall()
     used_contour_keys: set[tuple[str, str]] = set()
     used_measurement_keys: set[tuple[str, str]] = set()
+    series_states = snapshot.get("series_states") or {}
     for row in series_rows:
         series_id = int(row["id"])
+        previous_series_state = series_states.get(row["series_uid"])
+        restored_role = row["role"]
+        restored_metadata = _series_metadata(row)
+        restored_metadata.pop("tissue_lge_primary", None)
+        if previous_series_state:
+            restored_role = previous_series_state.get("role") or restored_role
+            if (
+                restored_role == "lge_sax"
+                and previous_series_state.get("is_tissue_lge_primary") is True
+            ):
+                restored_metadata["tissue_lge_primary"] = True
+            conn.execute(
+                "UPDATE series SET role = ?, orientation = ?, metadata_json = ? WHERE id = ?",
+                (
+                    restored_role,
+                    orientation_label(row["description"] or "", restored_role),
+                    dumps(restored_metadata),
+                    series_id,
+                ),
+            )
         current = {
             "series_uid": row["series_uid"],
-            "role": row["role"],
+            "role": restored_role,
             "description": row["description"] or "",
             "slice_count": int(row["slice_count"] or 0),
             "phase_count": int(row["phase_count"] or 0),
@@ -1255,7 +1346,8 @@ def fetch_study_detail(study_id: int, default_sample_path: str) -> dict[str, Any
                 )
                 study_data["patient_sex"] = next_sex
                 study_data["patient_age"] = next_age
-        series_rows = conn.execute("SELECT * FROM series WHERE study_id = ? ORDER BY id", (study_id,)).fetchall()
+        raw_series_rows = conn.execute("SELECT * FROM series WHERE study_id = ? ORDER BY id", (study_id,)).fetchall()
+        series_rows = sorted(raw_series_rows, key=_series_detail_sort_key)
         measurement_rows = conn.execute(
             """
             SELECT series_id, module, payload_json
@@ -1276,6 +1368,7 @@ def fetch_study_detail(study_id: int, default_sample_path: str) -> dict[str, Any
 
         series_payload = []
         for row in series_rows:
+            series_metadata = _series_metadata(row)
             frames = conn.execute(
                 """
                 SELECT id, slice_index, phase_index, instance_number, trigger_time, file_path, image_position_json, metadata_json
@@ -1302,6 +1395,7 @@ def fetch_study_detail(study_id: int, default_sample_path: str) -> dict[str, Any
                     "orientation": row["orientation"],
                     "folder_path": row["folder_path"],
                     "has_predictions": bool(row["has_predictions"]),
+                    "is_tissue_lge_primary": series_metadata.get("tissue_lge_primary") is True,
                     "default_slice": max(0, row["slice_count"] // 2),
                     "default_phase": 0,
                     "frames": [
@@ -1341,9 +1435,51 @@ def fetch_study_detail(study_id: int, default_sample_path: str) -> dict[str, Any
         }
 
 
+def set_tissue_lge_primary_series(series_id: int) -> dict[str, Any]:
+    with get_conn() as conn:
+        target = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
+        if target is None:
+            raise KeyError(series_id)
+        if target["role"] != "lge_sax":
+            raise ValueError("Only an lge_sax series can be selected for Tissue LGE.")
+
+        study_id = int(target["study_id"])
+        rows = conn.execute("SELECT * FROM series WHERE study_id = ?", (study_id,)).fetchall()
+        for row in rows:
+            metadata = _series_metadata(row)
+            changed = False
+            if int(row["id"]) == series_id:
+                if metadata.get("tissue_lge_primary") is not True:
+                    metadata["tissue_lge_primary"] = True
+                    changed = True
+            elif "tissue_lge_primary" in metadata:
+                metadata.pop("tissue_lge_primary", None)
+                changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE series SET metadata_json = ? WHERE id = ?",
+                    (dumps(metadata), row["id"]),
+                )
+        return {
+            "series_id": series_id,
+            "study_id": study_id,
+            "role": "lge_sax",
+            "is_tissue_lge_primary": True,
+        }
+
+
 def update_series_role(series_id: int, role: str) -> None:
     with get_conn() as conn:
-        conn.execute("UPDATE series SET role = ?, orientation = ? WHERE id = ?", (role, orientation_label("", role), series_id))
+        row = conn.execute("SELECT metadata_json FROM series WHERE id = ?", (series_id,)).fetchone()
+        if row is None:
+            raise KeyError(series_id)
+        metadata = _series_metadata(row)
+        if role != "lge_sax":
+            metadata.pop("tissue_lge_primary", None)
+        conn.execute(
+            "UPDATE series SET role = ?, orientation = ?, metadata_json = ? WHERE id = ?",
+            (role, orientation_label("", role), dumps(metadata), series_id),
+        )
 
 
 def get_series_row(series_id: int) -> dict[str, Any]:

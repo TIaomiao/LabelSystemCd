@@ -1708,8 +1708,10 @@ def _compute_lge_frame_threshold_masks(
 
     scar_mask = binary_opening(binary_closing(scar_mask, disk(1)), disk(1))
     scar_mask = remove_small_objects(scar_mask.astype(bool), min_size=max(6, int(0.0002 * image.shape[0] * image.shape[1])))
-    mvo_mask = masks["mvo"] & raw_myocardium
+    scar_mask &= myocardium
+    mvo_mask = masks["mvo"] & myocardium
     scar_mask = (scar_mask | mvo_mask) & myocardium
+    grey_mask = grey_mask & myocardium & ~scar_mask
     return {
         "method": method,
         "raw_myocardium": raw_myocardium,
@@ -1732,6 +1734,7 @@ def compute_lge_threshold_preview(
     threshold_method: str,
     sd_multiplier: float,
     grey_zone: bool,
+    phase_index: int = 0,
 ) -> dict:
     with get_conn() as conn:
         series = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
@@ -1739,8 +1742,13 @@ def compute_lge_threshold_preview(
         raise KeyError(series_id)
 
     contours = _fetch_contours(series_id, "lge") or {"frames": {}}
-    frame_key = _frame_key(int(slice_index), 0)
-    frame_payload = contours.get("frames", {}).get(frame_key)
+    selected_phase_index = max(0, int(phase_index))
+    frame_key = _frame_key(int(slice_index), selected_phase_index)
+    contour_frame_key = frame_key
+    frame_payload = contours.get("frames", {}).get(contour_frame_key)
+    if not isinstance(frame_payload, dict) and selected_phase_index != 0:
+        contour_frame_key = _frame_key(int(slice_index), 0)
+        frame_payload = contours.get("frames", {}).get(contour_frame_key)
     if not isinstance(frame_payload, dict):
         raise ValueError("当前层尚未保存 LGE 轮廓。")
 
@@ -1749,7 +1757,7 @@ def compute_lge_threshold_preview(
     spacing_x = float(_row_value(series, "pixel_spacing_x", 1.0) or 1.0)
     spacing_y = float(_row_value(series, "pixel_spacing_y", 1.0) or 1.0)
     pixel_area = spacing_x * spacing_y
-    frame = get_frame_row(series_id, int(slice_index), 0)
+    frame = get_frame_row(series_id, int(slice_index), selected_phase_index)
     image = read_frame_pixels(frame).astype(np.float32)
     masks = _frame_masks(frame_payload, rows, cols)
     result = _compute_lge_frame_threshold_masks(
@@ -1769,8 +1777,9 @@ def compute_lge_threshold_preview(
     return {
         "series_id": int(series_id),
         "slice_index": int(slice_index),
-        "phase_index": 0,
+        "phase_index": selected_phase_index,
         "frame_key": frame_key,
+        "contour_frame_key": contour_frame_key,
         "threshold_method": result["method"],
         "sd_multiplier": float(sd_multiplier),
         "grey_zone": bool(grey_zone),
@@ -2457,7 +2466,13 @@ def _segment_index(total_slices: int, slice_index: int, angle: np.ndarray) -> np
     return base_offset + np.floor(normalized / (2 * math.pi / segment_count)).astype(int)
 
 
-def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multiplier: float | None = None, grey_zone: bool | None = None) -> dict:
+def recompute_lge(
+    series_id: int,
+    threshold_method: str | None = None,
+    sd_multiplier: float | None = None,
+    grey_zone: bool | None = None,
+    phase_index: int | None = None,
+) -> dict:
     with get_conn() as conn:
         series = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
     if series is None:
@@ -2474,6 +2489,7 @@ def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multip
     pixel_area = spacing_x * spacing_y
     slice_thickness = float(series["slice_thickness"] or 8.0)
     total_slices = int(series["slice_count"] or 1)
+    selected_phase_index = max(0, int(phase_index or 0))
 
     scar_volume = 0.0
     myocardium_volume = 0.0
@@ -2494,12 +2510,17 @@ def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multip
     }
 
     for slice_index in range(total_slices):
-        frame_payload = contours["frames"].get(_frame_key(slice_index, 0))
+        frame_key = _frame_key(slice_index, selected_phase_index)
+        contour_frame_key = frame_key
+        frame_payload = contours["frames"].get(contour_frame_key)
+        if not frame_payload and selected_phase_index != 0:
+            contour_frame_key = _frame_key(slice_index, 0)
+            frame_payload = contours["frames"].get(contour_frame_key)
         if not frame_payload or not frame_payload.get("include", True):
             continue
-        if _is_frame_excluded(contours, slice_index, 0):
+        if _is_frame_excluded(contours, slice_index, selected_phase_index):
             continue
-        frame = get_frame_row(series_id, slice_index, 0)
+        frame = get_frame_row(series_id, slice_index, selected_phase_index)
         image = read_frame_pixels(frame).astype(np.float32)
         masks = _frame_masks(frame_payload, rows, cols)
         frame_result = _compute_lge_frame_threshold_masks(
@@ -2525,7 +2546,6 @@ def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multip
         if not enhanced_seed.any() and int(scar_mask.sum()) > 0:
             generated = _mask_to_polygon(scar_mask & ~mvo_mask)
             if generated:
-                frame_key = _frame_key(slice_index, 0)
                 generated_frame = dict(frame_payload)
                 generated_frame["enhanced"] = _merge_mask_polygons(generated_frame.get("enhanced"), generated)
                 generated_frame_updates[frame_key] = generated_frame
@@ -2538,15 +2558,15 @@ def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multip
         mvo_volume += float(mvo_mask.sum()) * pixel_area * slice_thickness / 1000.0
         grey_volume += float(grey_mask.sum()) * pixel_area * slice_thickness / 1000.0
         exclude_volume += float(exclude_mask.sum()) * pixel_area * slice_thickness / 1000.0
-        region_samples["myocardium"].append((image, myocardium, {"slice_index": slice_index, "phase_index": 0, "contour_keys": ["endo", "epi", "exclude"]}))
+        region_samples["myocardium"].append((image, myocardium, {"slice_index": slice_index, "phase_index": selected_phase_index, "contour_keys": ["endo", "epi", "exclude"]}))
         if int(scar_mask.sum()) > 0:
-            region_samples["scar"].append((image, scar_mask, {"slice_index": slice_index, "phase_index": 0, "contour_keys": ["enhanced", "remote"]}))
+            region_samples["scar"].append((image, scar_mask, {"slice_index": slice_index, "phase_index": selected_phase_index, "contour_keys": ["enhanced", "remote"]}))
         if int(remote_seed.sum()) > 0:
-            region_samples["remote"].append((image, remote_seed, {"slice_index": slice_index, "phase_index": 0, "contour_keys": ["remote"]}))
+            region_samples["remote"].append((image, remote_seed, {"slice_index": slice_index, "phase_index": selected_phase_index, "contour_keys": ["remote"]}))
         if int(mvo_mask.sum()) > 0:
-            region_samples["mvo"].append((image, mvo_mask, {"slice_index": slice_index, "phase_index": 0, "contour_keys": ["mvo"]}))
+            region_samples["mvo"].append((image, mvo_mask, {"slice_index": slice_index, "phase_index": selected_phase_index, "contour_keys": ["mvo"]}))
         if int(grey_mask.sum()) > 0:
-            region_samples["grey_zone"].append((image, grey_mask, {"slice_index": slice_index, "phase_index": 0, "contour_keys": ["enhanced", "remote"]}))
+            region_samples["grey_zone"].append((image, grey_mask, {"slice_index": slice_index, "phase_index": selected_phase_index, "contour_keys": ["enhanced", "remote"]}))
 
         center_points = np.argwhere(masks["endo"])
         if center_points.size:
@@ -2567,6 +2587,8 @@ def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multip
         per_slice.append(
             {
                 "slice_index": slice_index,
+                "phase_index": selected_phase_index,
+                "contour_frame_key": contour_frame_key,
                 "scar_volume_ml": round(scar_pixels * pixel_area * slice_thickness / 1000.0, 2),
                 "scar_mass_g": round(scar_pixels * pixel_area * slice_thickness / 1000.0 * 1.05, 2),
                 "scar_percent": round((scar_pixels / myocardium_pixels) * 100.0, 2) if myocardium_pixels else 0.0,
@@ -2615,6 +2637,7 @@ def recompute_lge(series_id: int, threshold_method: str | None = None, sd_multip
             "threshold_method": threshold_method,
             "sd_multiplier": sd_multiplier,
             "grey_zone": grey_zone,
+            "phase_index": selected_phase_index,
             "scar_volume_ml": round(scar_volume, 2),
             "scar_mass_g": round(scar_volume * 1.05, 2),
             "scar_percent_myocardium": round((scar_volume / myocardium_volume) * 100.0, 2) if myocardium_volume else 0.0,

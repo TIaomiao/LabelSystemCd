@@ -254,7 +254,12 @@ def _detect_4ch_function_phases(series: dict, frames: list[dict]) -> dict:
 
     with get_conn() as conn:
         sax_series = conn.execute(
-            "SELECT * FROM series WHERE study_id = ? AND role = 'cine_sax' ORDER BY id LIMIT 1",
+            """
+            SELECT * FROM series
+            WHERE study_id = ? AND role = 'cine_sax'
+            ORDER BY slice_count DESC, file_count DESC, id
+            LIMIT 1
+            """,
             (series["study_id"],),
         ).fetchone()
 

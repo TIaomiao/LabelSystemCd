@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from apps.api.services.dicom_indexer import (
     _image_orientation,
     _image_position,
     _pixel_spacing,
+    fetch_study_detail,
     import_study,
     infer_role,
     normalize_series_role,
@@ -32,6 +34,8 @@ def _write_dicom(
     acquisition_offset_seconds: int = 0,
     sop_class_uid: str = MRImageStorage,
     include_dimensions: bool = True,
+    series_description: str = "cine_tf2d16_retro_iPAT_8sl",
+    protocol_name: str | None = None,
 ) -> None:
     file_meta = FileMetaDataset()
     file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -49,8 +53,8 @@ def _write_dicom(
     dataset.StudyDate = "20260716"
     dataset.SeriesNumber = series_number
     dataset.InstanceNumber = phase_index + 1
-    dataset.SeriesDescription = "cine_tf2d16_retro_iPAT_8sl"
-    dataset.ProtocolName = "cine_tf2d16_retro_iPAT_8sl"
+    dataset.SeriesDescription = series_description
+    dataset.ProtocolName = protocol_name if protocol_name is not None else series_description
     acquisition_seconds = acquisition_offset_seconds + slice_index * 10 + phase_index / 1000
     acquisition_hour = 12 + int(acquisition_seconds // 3600)
     acquisition_remainder = acquisition_seconds % 3600
@@ -365,6 +369,160 @@ class SplitSaxImportTest(unittest.TestCase):
                 )
                 frame_count = conn.execute("SELECT COUNT(*) FROM frames").fetchone()[0]
                 self.assertEqual(frame_count, 100)
+                conn.close()
+
+    def test_legacy_parent_sequence_folder_drives_sax_and_4ch_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(db, "DB_PATH", tmp_path / "cvi.db"):
+                study_root = tmp_path / "legacy-study"
+                sax_root = study_root / "SAX"
+                four_ch_root = study_root / "4CH"
+                sax_root.mkdir(parents=True)
+                four_ch_root.mkdir(parents=True)
+                study_uid = generate_uid()
+                generic_description = "tf2d14_retro_iPAT_FIL"
+
+                four_ch_series = four_ch_root / "11_tf2d14_retro_iPAT_FIL"
+                four_ch_series.mkdir()
+                four_ch_uid = generate_uid()
+                for phase_index in range(20):
+                    _write_dicom(
+                        four_ch_series / f"image-{phase_index + 1:03d}.dcm",
+                        study_uid=study_uid,
+                        series_uid=four_ch_uid,
+                        series_number=11,
+                        slice_index=0,
+                        phase_index=phase_index,
+                        series_description=generic_description,
+                    )
+
+                for slice_index in range(5):
+                    series_dir = sax_root / f"{17 + slice_index}_tf2d14_retro_iPAT_FIL"
+                    series_dir.mkdir()
+                    series_uid = generate_uid()
+                    for phase_index in range(20):
+                        _write_dicom(
+                            series_dir / f"image-{phase_index + 1:03d}.dcm",
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                            series_number=17 + slice_index,
+                            slice_index=slice_index,
+                            phase_index=phase_index,
+                            series_description=generic_description,
+                        )
+
+                study_id = import_study(str(study_root))
+
+                conn = sqlite3.connect(db.DB_PATH)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT role, file_count, slice_count, phase_count FROM series WHERE study_id = ? ORDER BY role",
+                    (study_id,),
+                ).fetchall()
+                self.assertEqual(
+                    [dict(row) for row in rows],
+                    [
+                        {"role": "cine_lax_4ch", "file_count": 20, "slice_count": 1, "phase_count": 20},
+                        {"role": "cine_sax", "file_count": 100, "slice_count": 5, "phase_count": 20},
+                    ],
+                )
+                conn.close()
+
+    def test_study_detail_prefers_fuller_cine_sax_stack_over_three_slice_scout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(db, "DB_PATH", tmp_path / "cvi.db"):
+                study_root = tmp_path / "study"
+                scout_dir = study_root / "SAX"
+                full_stack_dir = study_root / "SAX_0"
+                scout_dir.mkdir(parents=True)
+                full_stack_dir.mkdir(parents=True)
+                study_uid = generate_uid()
+
+                for slice_index in range(3):
+                    for phase_index in range(2):
+                        _write_dicom(
+                            scout_dir / f"scout-{slice_index}-{phase_index}.dcm",
+                            study_uid=study_uid,
+                            series_uid=generate_uid(),
+                            series_number=10 + slice_index,
+                            slice_index=slice_index,
+                            phase_index=phase_index,
+                            series_description="sBTFE_BH_small_FOV",
+                            protocol_name="sBTFE_BH",
+                        )
+
+                full_stack_uid = generate_uid()
+                for slice_index in range(5):
+                    for phase_index in range(2):
+                        _write_dicom(
+                            full_stack_dir / f"stack-{slice_index}-{phase_index}.dcm",
+                            study_uid=study_uid,
+                            series_uid=full_stack_uid,
+                            series_number=20,
+                            slice_index=slice_index,
+                            phase_index=phase_index,
+                            series_description="B-TFE_M2D_SA",
+                            protocol_name="B-TFE_M2D_SA",
+                        )
+
+                study_id = import_study(str(study_root))
+                detail = fetch_study_detail(study_id, str(study_root))
+                self.assertIsNotNone(detail)
+
+                sax_series = [series for series in detail["series"] if series["role"] == "cine_sax"]
+                self.assertGreaterEqual(len(sax_series), 2)
+                self.assertEqual(sax_series[0]["slice_count"], 5)
+                self.assertIn("SAX_0", sax_series[0]["folder_path"])
+                self.assertEqual(sax_series[1]["slice_count"], 3)
+
+    def test_import_skips_surrogateescaped_dicom_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(db, "DB_PATH", tmp_path / "cvi.db"):
+                study_root = tmp_path / "study"
+                valid_dir = study_root / "LGE=2"
+                invalid_dir = study_root / os.fsdecode(b"LGE=2 - \xb8\xb1")
+                valid_dir.mkdir(parents=True)
+                invalid_dir.mkdir(parents=True)
+                self.assertTrue(any("\udc80" <= char <= "\udcff" for char in str(invalid_dir)))
+                study_uid = generate_uid()
+                _write_dicom(
+                    valid_dir / "valid.dcm",
+                    study_uid=study_uid,
+                    series_uid=generate_uid(),
+                    series_number=1,
+                    slice_index=0,
+                    phase_index=0,
+                    series_description="PSIR_TFE_BH",
+                )
+                _write_dicom(
+                    invalid_dir / "invalid.dcm",
+                    study_uid=study_uid,
+                    series_uid=generate_uid(),
+                    series_number=2,
+                    slice_index=0,
+                    phase_index=0,
+                    series_description="PSIR_TFE_BH",
+                )
+
+                study_id = import_study(str(study_root))
+
+                conn = sqlite3.connect(db.DB_PATH)
+                file_paths = [
+                    row[0]
+                    for row in conn.execute(
+                        """
+                        SELECT file_path FROM frames
+                        WHERE series_id IN (SELECT id FROM series WHERE study_id = ?)
+                        """,
+                        (study_id,),
+                    ).fetchall()
+                ]
+                self.assertEqual(len(file_paths), 1)
+                self.assertIn("valid.dcm", file_paths[0])
+                self.assertFalse(any("\udc80" <= char <= "\udcff" for char in file_paths[0]))
                 conn.close()
 
     def test_import_keeps_repeated_split_sax_acquisitions_separate(self):

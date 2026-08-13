@@ -1,7 +1,7 @@
 (function () {
   if (!document.documentElement.classList.contains('cvi-embedded')) return;
 
-  const EMBEDDED_VERSION = 'v2026.07.16-4';
+  const EMBEDDED_VERSION = 'v2026.08.13-2';
   const CVI_API_BASE = '/cvi-api';
   const storage = window.localStorage;
   const keys = {
@@ -32,7 +32,8 @@
       ...series,
       id,
       description: String(series.description || ''),
-      role: String(series.role || 'unknown')
+      role: String(series.role || 'unknown'),
+      is_tissue_lge_primary: series.is_tissue_lge_primary === true
     };
   };
 
@@ -66,6 +67,17 @@
   const getCurrentStudyId = () => {
     const match = window.location.pathname.match(/\/study\/(\d+)(?:\/|$)/);
     return match ? Number(match[1]) : null;
+  };
+
+  const readNavigatorIndex = (labelText) => {
+    const labels = Array.from(document.querySelectorAll('.navigator-bar label'));
+    const matchedLabel = labels.find((label) => {
+      const labelNode = Array.from(label.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
+      const text = (labelNode?.textContent || label.textContent || '').trim();
+      return text.startsWith(labelText);
+    });
+    const value = Number(matchedLabel?.querySelector('input[type="range"]')?.value || 0);
+    return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
   };
 
   const captureMeasurementPayload = (payload) => {
@@ -104,6 +116,16 @@
               ? `${parsed.pathname}${parsed.search}${parsed.hash}`
               : parsed.toString();
             requestArgs = [requestUrl, args[1]];
+          }
+        } catch {}
+      }
+      if (typeof args[0] === 'string' && requestMethod === 'POST') {
+        try {
+          const parsed = new URL(String(requestUrl), window.location.origin);
+          if (/\/measurements\/lge$/.test(parsed.pathname) && typeof args[1]?.body === 'string') {
+            const payload = JSON.parse(args[1].body);
+            payload.phase_index = readNavigatorIndex('Phase');
+            requestArgs = [requestUrl, { ...args[1], body: JSON.stringify(payload) }];
           }
         } catch {}
       }
@@ -497,12 +519,49 @@
     return role === 'unknown';
   };
 
+  const resolveEffectiveTissueLgePrimary = (seriesList) => {
+    const eligible = Array.isArray(seriesList)
+      ? seriesList.filter((item) => item?.role === 'lge_sax')
+      : [];
+    const explicit = eligible.find((item) => item.is_tissue_lge_primary === true);
+    const effective = explicit || eligible[0] || null;
+    return {
+      seriesId: effective?.id == null ? null : Number(effective.id),
+      isExplicit: Boolean(explicit)
+    };
+  };
+
+  const getEffectiveTissueLgePrimary = () => {
+    const availableSeries = seriesCache.series.length
+      ? seriesCache.series
+      : Array.isArray(window.__cviSeriesCache?.series)
+        ? window.__cviSeriesCache.series
+        : [];
+    return resolveEffectiveTissueLgePrimary(availableSeries);
+  };
+
   const updateSeriesRoleControlsState = (card, series) => {
     const host = card.querySelector('.cvi-role-controls');
     if (!host) return;
     const role = series?.role || card.dataset.cviSeriesRole || 'unknown';
     host.dataset.currentRole = role;
     host.querySelectorAll('.cvi-role-choice').forEach((choice) => {
+      if (choice.dataset.roleKey === 'tissue-lge-primary') {
+        const eligible = role === 'lge_sax';
+        const effectivePrimary = getEffectiveTissueLgePrimary();
+        const active = eligible && Number(series?.id) === effectivePrimary.seriesId;
+        const explicit = active && series?.is_tissue_lge_primary === true;
+        choice.hidden = !eligible;
+        choice.classList.toggle('is-active', active);
+        choice.setAttribute('aria-pressed', active ? 'true' : 'false');
+        choice.textContent = active ? 'Tissue LGE ✓' : '设为 Tissue LGE';
+        choice.title = active
+          ? explicit
+            ? '当前 Tissue LGE 使用人工指定的此序列'
+            : '尚未人工指定，当前按序列顺序默认使用此序列'
+          : '将此 lge_sax 序列设为 Tissue LGE 的默认标注序列';
+        return;
+      }
       const active = isRoleOptionActive(choice.dataset.roleKey, role);
       choice.classList.toggle('is-active', active);
       choice.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -539,14 +598,24 @@
       }
       const payload = await response.json().catch(() => ({}));
       series.role = payload.role || role;
+      if (series.role !== 'lge_sax') series.is_tissue_lge_primary = false;
       const cached = seriesCache.series.find((item) => item.id === series.id);
-      if (cached) cached.role = series.role;
+      if (cached) {
+        cached.role = series.role;
+        cached.is_tissue_lge_primary = series.is_tissue_lge_primary;
+      }
       if (window.__cviSeriesCache?.series) {
         const publicCached = window.__cviSeriesCache.series.find((item) => Number(item.id) === series.id);
-        if (publicCached) publicCached.role = series.role;
+        if (publicCached) {
+          publicCached.role = series.role;
+          publicCached.is_tissue_lge_primary = series.is_tissue_lge_primary;
+        }
       }
       setOverviewCardRoleText(card, series.role);
-      updateSeriesRoleControlsState(card, series);
+      document.querySelectorAll('.overview-grid .overview-card').forEach((overviewCard, index) => {
+        const overviewSeries = getOverviewCardSeries(overviewCard, index);
+        if (overviewSeries) updateSeriesRoleControlsState(overviewCard, overviewSeries);
+      });
       window.dispatchEvent(new CustomEvent('cvi:series-role-updated', {
         detail: { seriesId: series.id, role: series.role }
       }));
@@ -587,14 +656,83 @@
     return choice;
   };
 
+  const setTissueLgePrimary = async (card, series) => {
+    const effectivePrimary = getEffectiveTissueLgePrimary();
+    if (!series?.id || series.role !== 'lge_sax' || Number(series.id) === effectivePrimary.seriesId) return;
+    const host = card.querySelector('.cvi-role-controls');
+    host?.classList.add('is-busy');
+    host?.setAttribute('aria-busy', 'true');
+    try {
+      const response = await window.fetch(`${CVI_API_BASE}/series/${series.id}/tissue-lge-primary`, {
+        method: 'POST',
+        headers: { Accept: 'application/json' }
+      });
+      if (!response.ok) {
+        const message = await response.text().catch(() => '');
+        throw new Error(message || `HTTP ${response.status}`);
+      }
+      seriesCache.series.forEach((item) => {
+        item.is_tissue_lge_primary = item.id === series.id;
+      });
+      if (window.__cviSeriesCache?.series) {
+        window.__cviSeriesCache.series.forEach((item) => {
+          item.is_tissue_lge_primary = Number(item.id) === series.id;
+        });
+      }
+      window.dispatchEvent(new CustomEvent('cvi:tissue-lge-primary-updated', {
+        detail: { studyId: seriesCache.studyId, seriesId: series.id }
+      }));
+      document.querySelectorAll('.overview-grid .overview-card').forEach((overviewCard, index) => {
+        const overviewSeries = getOverviewCardSeries(overviewCard, index);
+        if (overviewSeries) updateSeriesRoleControlsState(overviewCard, overviewSeries);
+        overviewCard.querySelector('.cvi-role-controls')?.classList.remove('is-busy');
+        overviewCard.querySelector('.cvi-role-controls')?.removeAttribute('aria-busy');
+      });
+    } catch (error) {
+      window.alert(`Tissue LGE 序列设置失败：${error instanceof Error ? error.message : String(error)}`);
+      host?.classList.remove('is-busy');
+      host?.removeAttribute('aria-busy');
+    }
+  };
+
+  const createTissueLgePrimaryChoice = (card, series) => {
+    const choice = document.createElement('span');
+    choice.className = 'cvi-role-choice cvi-tissue-lge-choice';
+    choice.dataset.roleKey = 'tissue-lge-primary';
+    choice.setAttribute('role', 'button');
+    choice.setAttribute('tabindex', '0');
+    ['pointerdown', 'mousedown'].forEach((eventName) => {
+      choice.addEventListener(eventName, stopNestedCardActivation);
+    });
+    const activate = (event) => {
+      stopNestedCardActivation(event);
+      if (!choice.closest('.cvi-role-controls')?.classList.contains('is-busy')) {
+        setTissueLgePrimary(card, series);
+      }
+    };
+    choice.addEventListener('click', activate);
+    choice.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') activate(event);
+    });
+    return choice;
+  };
+
   const ensureOverviewSeriesRoleControls = () => {
     const cards = Array.from(document.querySelectorAll('.overview-grid .overview-card'));
     if (!cards.length) return;
     refreshCurrentStudySeriesCache();
+    const availableSeries = seriesCache.series.length
+      ? seriesCache.series
+      : Array.isArray(window.__cviSeriesCache?.series)
+        ? window.__cviSeriesCache.series
+        : [];
 
     cards.forEach((card, index) => {
       if (!(card instanceof HTMLElement)) return;
-      const series = getOverviewCardSeries(card, index);
+      const seriesId = getSeriesIdFromOverviewCard(card);
+      const series = (seriesId
+        ? availableSeries.find((item) => Number(item.id) === seriesId)
+        : null) || getOverviewCardSeries(card, index);
       if (!series?.id) return;
       card.dataset.cviSeriesId = String(series.id);
 
@@ -606,6 +744,7 @@
         overviewRoleOptions.forEach((option) => {
           host.appendChild(createOverviewRoleChoice(card, series, option));
         });
+        host.appendChild(createTissueLgePrimaryChoice(card, series));
         const body = card.querySelector('div') || card;
         body.appendChild(host);
       }
@@ -2626,6 +2765,8 @@
   };
 
   const shouldHideProtocolPhaseControls = () => {
+    const visibleOverviewGrid = Array.from(document.querySelectorAll('.overview-grid')).find(isVisibleElement);
+    if (visibleOverviewGrid) return true;
     return hiddenProtocolPhasePages.has(normalizeProtocolLabel(getActiveProtocolLabel()));
   };
 
@@ -3081,7 +3222,8 @@
     if (!match) return null;
     return {
       seriesId: Number(match[1]),
-      sliceIndex: Number(getNavigatorInput('Slice')?.value || 0)
+      sliceIndex: Number(getNavigatorInput('Slice')?.value || 0),
+      phaseIndex: Number(getNavigatorInput('Phase')?.value || 0)
     };
   };
 
@@ -3154,6 +3296,7 @@
     const identity = [
       context.seriesId,
       context.sliceIndex,
+      context.phaseIndex,
       controls.method,
       controls.sdMultiplier,
       controls.greyZone ? 1 : 0
@@ -3170,6 +3313,7 @@
         body: JSON.stringify({
           series_id: context.seriesId,
           slice_index: context.sliceIndex,
+          phase_index: context.phaseIndex,
           threshold_method: controls.method,
           sd_multiplier: controls.sdMultiplier,
           grey_zone: controls.greyZone
@@ -3553,6 +3697,7 @@
     const previewIdentity = previewContext && previewControls ? [
       previewContext.seriesId,
       previewContext.sliceIndex,
+      previewContext.phaseIndex,
       previewControls.method,
       previewControls.sdMultiplier,
       previewControls.greyZone ? 1 : 0
@@ -3611,8 +3756,8 @@
         ? `当前层预览失败：${lgeThresholdPreviewState.error}`
         : previewStats
           ? lgeThresholdPreviewState.scarVisible
-            ? `当前层预览：Scar ${Number(previewStats.scar?.area_mm2 || 0).toFixed(1)} mm² / Grey ${Number(previewStats.grey_zone?.area_mm2 || 0).toFixed(1)} mm²`
-            : `当前层预览：Grey ${Number(previewStats.grey_zone?.area_mm2 || 0).toFixed(1)} mm²`
+            ? `当前层 P${Number(lgeThresholdPreviewState.preview?.phase_index || 0) + 1} 预览：Scar ${Number(previewStats.scar?.area_mm2 || 0).toFixed(1)} mm² / Grey ${Number(previewStats.grey_zone?.area_mm2 || 0).toFixed(1)} mm²`
+            : `当前层 P${Number(lgeThresholdPreviewState.preview?.phase_index || 0) + 1} 预览：Grey ${Number(previewStats.grey_zone?.area_mm2 || 0).toFixed(1)} mm²`
           : '当前层预览：—';
     const previewValue = previewRow.querySelector(':scope > strong');
     if (previewValue && previewValue.textContent !== previewCopy) previewValue.textContent = previewCopy;
@@ -4184,13 +4329,15 @@
 
   const apply = () => {
     safeEnsureProtocolPhaseControlsVisibility();
+    try {
+      hideSeriesOverviewToolbar();
+      ensureOverviewSeriesRoleControls();
+    } catch {}
     inspectorTabKey = readInspectorTab();
     setRootVars();
     ensureWorkspaceHandles();
     ensureViewerHandles();
     ensureReferenceStacks();
-    hideSeriesOverviewToolbar();
-    ensureOverviewSeriesRoleControls();
     ensure4chRoleWarning();
     fitViewerStages();
     removeViewerProtocolEntry();
@@ -4302,5 +4449,12 @@
     if (rulerState.active) window.setTimeout(scheduleApply, 50);
   }, true);
   window.setInterval(safeEnsureProtocolPhaseControlsVisibility, 400);
+  window.setInterval(() => {
+    try {
+      hideSeriesOverviewToolbar();
+      ensureOverviewSeriesRoleControls();
+      ensureWorkstationVersionBadge();
+    } catch {}
+  }, 400);
   scheduleApply();
 })();

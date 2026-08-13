@@ -120,6 +120,7 @@ class SeriesSummary(BaseModel):
     orientation: Optional[str] = None
     folder_path: str
     has_predictions: bool = False
+    is_tissue_lge_primary: bool = False
     default_slice: int = 0
     default_phase: int = 0
     frames: List[FrameRef] = Field(default_factory=list)
@@ -215,6 +216,7 @@ class MeasurementRequest(BaseModel):
     threshold_method: Optional[Literal["nsd", "fwhm"]] = None
     sd_multiplier: float = 5.0
     grey_zone: bool = False
+    phase_index: int = Field(default=0, ge=0)
 
 
 class CurvaturePreviewRequest(BaseModel):
@@ -233,6 +235,7 @@ class FatThresholdPreviewRequest(BaseModel):
 class LgeThresholdPreviewRequest(BaseModel):
     series_id: int
     slice_index: int
+    phase_index: int = Field(default=0, ge=0)
     threshold_method: Literal["nsd", "fwhm"] = "nsd"
     sd_multiplier: float = 5.0
     grey_zone: bool = False

@@ -5,9 +5,28 @@ export interface WorkstationChangeLogEntry {
 }
 
 // Update both the version and changelog entries whenever the workstation UI changes.
-export const WORKSTATION_VERSION = 'v2026.07.16-4';
+export const WORKSTATION_VERSION = 'v2026.08.13-2';
 
 export const WORKSTATION_CHANGELOG: WorkstationChangeLogEntry[] = [
+  {
+    version: 'v2026.08.13-2',
+    date: '2026-08-13',
+    items: [
+      '未人工指定 Tissue LGE 时，Series Overview 会把实际默认使用的第一条 lge_sax 标为 Tissue LGE ✓。',
+      '人工切换主序列后，勾选只保留在新主序列，并在刷新或重新打开病例后保持一致。',
+      '序列角色调整后会重新计算当前有效 Tissue LGE，避免同时无勾选或错误勾选。'
+    ]
+  },
+  {
+    version: 'v2026.08.13-1',
+    date: '2026-08-13',
+    items: [
+      'Series Overview 仅在 lge_sax 序列显示 Tissue LGE 选择，并明确标出当前主序列。',
+      '设置 Tissue LGE 后原地更新卡片状态，不再整页刷新或扰乱 Overview 布局。',
+      'Series Overview 隐藏 Slice / Phase Matrix；普通“重新打开”复用已有 Study，不再触发强制重建索引。',
+      '真正重导入时按 Series UID 保留人工序列角色和 Tissue LGE 主序列标记。'
+    ]
+  },
   {
     version: 'v2026.07.16-4',
     date: '2026-07-16',

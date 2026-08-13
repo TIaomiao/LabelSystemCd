@@ -12,7 +12,7 @@ from .config import DEFAULT_SAMPLE_PATH, ensure_runtime_dirs
 from .db import init_db, loads
 from .models import ContourSet, CurvaturePreviewRequest, CurvatureUpdateRequest, DirectoryListing, FatThresholdPreviewRequest, ImportStudyRequest, InferJobRequest, JobStatus, LgeThresholdPreviewRequest, MeasurementRequest, ModelFrameSegmentationRequest, NeighborPropagationRequest, PhaseDetectionResult, PromptSegmentationRequest, ReportDraft, ReportUpdateRequest, RoleUpdateRequest, StudyDetail
 from .services.access_scope import job_study_scope, study_source_matches_roots
-from .services.dicom_indexer import fetch_study_detail, get_frame_row, get_series_row, import_study, list_directories, list_frame_rows, read_frame_pixels, repair_series_roles, update_series_role
+from .services.dicom_indexer import fetch_study_detail, get_frame_row, get_series_row, import_study, list_directories, list_frame_rows, read_frame_pixels, repair_series_roles, set_tissue_lge_primary_series, update_series_role
 from .services.inference import create_job, fetch_contours, fetch_job, fetch_study_annotation_summaries, pause_job, run_job, save_contours, save_curvature_landmarks
 from .services.measurements import compute_curvature_preview, compute_fat_threshold_preview, compute_lge_threshold_preview, compute_lv_tracking_preview, ensure_render, export_pdf, measurement_to_csv, recompute_function, recompute_lge
 from .services.model_frame_segmentation import apply_model_frame_segmentation
@@ -140,6 +140,16 @@ def update_role(series_id: int, payload: RoleUpdateRequest) -> dict:
         return {"series_id": series_id, "role": payload.role}
     except KeyError:
         raise HTTPException(status_code=404, detail="Series not found.")
+
+
+@app.post("/series/{series_id}/tissue-lge-primary")
+def set_tissue_lge_primary(series_id: int) -> dict:
+    try:
+        return set_tissue_lge_primary_series(series_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Series not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/jobs/infer", response_model=JobStatus)
@@ -340,6 +350,7 @@ def lge_threshold_preview_endpoint(payload: LgeThresholdPreviewRequest) -> dict:
             payload.threshold_method,
             payload.sd_multiplier,
             payload.grey_zone,
+            phase_index=payload.phase_index,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Series or frame not found.")
@@ -360,7 +371,13 @@ def detect_phases(series_id: int) -> dict:
 @app.post("/measurements/lge")
 def recompute_lge_endpoint(payload: MeasurementRequest) -> dict:
     try:
-        return recompute_lge(payload.series_id, payload.threshold_method or "nsd", payload.sd_multiplier, payload.grey_zone)
+        return recompute_lge(
+            payload.series_id,
+            payload.threshold_method or "nsd",
+            payload.sd_multiplier,
+            payload.grey_zone,
+            phase_index=payload.phase_index,
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="Series not found.")
 

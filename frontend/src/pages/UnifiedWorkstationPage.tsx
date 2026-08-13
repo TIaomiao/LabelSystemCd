@@ -604,7 +604,7 @@ const UnifiedWorkstationPage: React.FC = () => {
               onClick={event => {
                 event.stopPropagation();
                 if (selectedModule === 'cvi') {
-                  openCaseInCvi(caseItem);
+                  openCaseInCvi(caseItem, false);
                   return;
                 }
                 setSelectedCaseId(caseItem.id);
