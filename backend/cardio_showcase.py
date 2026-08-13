@@ -13,7 +13,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask_login import current_user
 
 
-SHOWCASE_DATA_ROOT = Path("/home/Larry/code/Ziqiu/MRIAgent/data/CMR_ALL").resolve()
+SHOWCASE_DATA_ROOT = Path(os.environ.get("LABELSYSTEM_SHOWCASE_DATA_ROOT", "/home/Larry/data/CMR_ALL")).resolve()
 SHOWCASE_OUTPUT_ROOT = Path("/home/Larry/code/Ziqiu/MRIAgent/src/output/CMR_ALL").resolve()
 SHOWCASE_WEB_ORIGIN = os.environ.get("LABELSYSTEM_SHOWCASE_WEB_ORIGIN", "http://127.0.0.1:3015").rstrip("/")
 SHOWCASE_PROXY_HEADERS = {
@@ -252,15 +252,20 @@ def patient_info():
         return jsonify({"error": "Patient not found"}), 404
 
     info_path = patient_dir / "patient_info.json"
-    if not info_path.exists():
-        return jsonify({"error": "Patient info not found"}), 404
+    if info_path.exists():
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return jsonify({"error": "Patient info is invalid"}), 500
+    else:
+        info = {
+            "patient_id": patient_dir.name,
+            "sex": "未记录",
+            "age": "未记录",
+            "imaging_goal": "Demo 病例未提供 patient_info.json，使用页面内置病史作为展示文本。",
+        }
 
-    try:
-        info = json.loads(info_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return jsonify({"error": "Patient info is invalid"}), 500
-
-    id_parts = patient_dir.name.split("_")
+    id_parts = patient_dir.name.replace(" ", "_").split("_")
     info["displayId"] = f"{id_parts[0]}_{id_parts[1]}" if len(id_parts) >= 2 else patient_id
     if "patient_name" in info:
         info["patient_name"] = "Anonymous Demo"

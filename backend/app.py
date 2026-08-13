@@ -60,6 +60,11 @@ app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
         'dataset': 'CMR_ALL',
         'label': '昆医附二院',
         'path': '/home/Larry/data/CMR_ALL',
+        # Controlled supplement: only Excel-assigned task cases are symlinked here.
+        # This keeps Kunming task backfills indexable without copying DICOM or scanning all raw archives.
+        'additional_paths': [
+            os.environ.get('CMR_ALL_EXCEL_TASK_LINK_ROOT', '/home/Larry/data/CMR_ALL_excel_task_symlinks'),
+        ],
     },
     {
         'dataset': 'CMR_Chendu',

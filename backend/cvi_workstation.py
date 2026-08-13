@@ -773,6 +773,10 @@ def _is_hidden(path: Path) -> bool:
     return path.name.startswith(".") or path.name == "__MACOSX"
 
 
+def _contains_surrogate(text: str) -> bool:
+    return any("\udc80" <= char <= "\udcff" for char in text)
+
+
 def _looks_like_dicom(filename: str) -> bool:
     name = filename.strip()
     lower = name.lower()
@@ -782,6 +786,19 @@ def _looks_like_dicom(filename: str) -> bool:
         return False
     # Several RenJi exports use extensionless Philips-style files such as IM_0001.
     return bool(re.fullmatch(r"(?:im[_-]?)?\d{4,}", lower) or re.fullmatch(r"\d[\d.]{15,}", lower))
+
+
+def _count_direct_dicoms(sequence_dir: Path) -> int:
+    try:
+        return sum(
+            1
+            for item in sequence_dir.iterdir()
+            if item.is_file()
+            and not _contains_surrogate(str(item))
+            and _looks_like_dicom(item.name)
+        )
+    except OSError:
+        return 0
 
 
 def _selection_range_from_sequence_name(name: str) -> tuple[int, int] | None:
@@ -799,7 +816,13 @@ def _count_selected_dicoms(sequence_dir: Path) -> int:
     files: list[Path] = []
     try:
         files = sorted(
-            [item for item in sequence_dir.iterdir() if item.is_file() and _looks_like_dicom(item.name)],
+            [
+                item
+                for item in sequence_dir.iterdir()
+                if item.is_file()
+                and not _contains_surrogate(str(item))
+                and _looks_like_dicom(item.name)
+            ],
             key=lambda item: item.name.lower(),
         )
     except OSError:
@@ -808,7 +831,13 @@ def _count_selected_dicoms(sequence_dir: Path) -> int:
     if not files:
         try:
             files = sorted(
-                [item for item in sequence_dir.rglob("*") if item.is_file() and _looks_like_dicom(item.name)],
+                [
+                    item
+                    for item in sequence_dir.rglob("*")
+                    if item.is_file()
+                    and not _contains_surrogate(str(item))
+                    and _looks_like_dicom(item.name)
+                ],
                 key=lambda item: str(item.relative_to(sequence_dir)).lower(),
             )
         except OSError:
@@ -872,6 +901,11 @@ def _sequence_summary(case_path: Path) -> tuple[list[dict], int, bool]:
     sequences: list[dict] = []
     total = 0
     has_dicom = False
+    direct_count = _count_direct_dicoms(case_path)
+    if direct_count > 0:
+        total += direct_count
+        has_dicom = True
+        sequences.append({"name": "DICOM", "dicom_count": direct_count})
     try:
         children = sorted(
             [child for child in case_path.iterdir() if child.is_dir() and not _is_hidden(child)],
@@ -899,6 +933,8 @@ def _has_direct_cmr_sequence_dirs(case_path: Path) -> bool:
     except OSError:
         return False
     for name in child_names:
+        if name.upper() == "DICOM":
+            return True
         if name in {"4CH", "SAX", "LGE"}:
             return True
         if name.startswith(("4CH=", "SAX=", "LGE=", "4CH_", "SAX_", "LGE_")):
@@ -949,6 +985,7 @@ def _source_roots() -> list[dict]:
                 "dataset": dataset_name,
                 "label": str(item.get("label") or dataset_name),
                 "path": root_path,
+                "additional_paths": item.get("additional_paths"),
                 "case_dir_contains_dicoms": bool(item.get("case_dir_contains_dicoms")),
                 "case_dir_depth": item.get("case_dir_depth"),
                 "case_id_manifest": item.get("case_id_manifest"),
@@ -1256,6 +1293,28 @@ def _configured_dataset_item(dataset: str) -> dict | None:
     return None
 
 
+def _dataset_item_scan_paths(dataset_item: dict) -> list[Path]:
+    paths: list[Path] = []
+    raw_paths = [dataset_item.get("path"), *(dataset_item.get("additional_paths") or [])]
+    seen: set[str] = set()
+    for raw_path in raw_paths:
+        path_text = str(raw_path or "").strip()
+        if not path_text:
+            continue
+        path = Path(path_text).expanduser()
+        if not path.exists():
+            continue
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path)
+    return paths
+
+
 def _manifest_search_matches(dataset_filters: list[str] | None, search: str) -> dict[str, set[str]]:
     needle = str(search or "").strip().casefold()
     if not needle:
@@ -1307,54 +1366,54 @@ def _iter_case_dirs(source_filter: str = "all", dataset_filters: list[str] | Non
             for dataset_item in dataset_roots:
                 if dataset_filters and dataset_item["dataset"] not in dataset_filters:
                     continue
-                dataset_dir: Path = dataset_item["path"]
-                configured_depth = dataset_item.get("case_dir_depth")
-                if configured_depth is not None:
-                    try:
-                        case_dir_depth = int(configured_depth)
-                    except (TypeError, ValueError):
-                        raise RuntimeError(f"Invalid case directory depth for {dataset_item['dataset']}")
-                    case_id_map = _case_id_manifest_map(dataset_item)
-                    for case_dir in _iter_dirs_at_depth(dataset_dir, case_dir_depth):
-                        relative_case_id = case_dir.relative_to(dataset_dir).as_posix()
-                        case_id = case_id_map.get(relative_case_id)
-                        if not case_id:
+                for dataset_dir in _dataset_item_scan_paths(dataset_item):
+                    configured_depth = dataset_item.get("case_dir_depth")
+                    if configured_depth is not None:
+                        try:
+                            case_dir_depth = int(configured_depth)
+                        except (TypeError, ValueError):
+                            raise RuntimeError(f"Invalid case directory depth for {dataset_item['dataset']}")
+                        case_id_map = _case_id_manifest_map(dataset_item)
+                        for case_dir in _iter_dirs_at_depth(dataset_dir, case_dir_depth):
+                            relative_case_id = case_dir.relative_to(dataset_dir).as_posix()
+                            case_id = case_id_map.get(relative_case_id)
+                            if not case_id:
+                                continue
+                            yielded += 1
+                            if yielded > CASE_SCAN_LIMIT:
+                                return
+                            yield item["source"], dataset_item["dataset"], case_id, case_dir
+                        continue
+                    case_dirs = sorted(
+                        [child for child in dataset_dir.iterdir() if child.is_dir() and not _is_hidden(child)],
+                        key=lambda path: path.name.lower(),
+                    )
+                    for case_dir in case_dirs:
+                        nested_case_dirs = sorted(
+                            [
+                                child
+                                for child in case_dir.iterdir()
+                                if child.is_dir() and not _is_hidden(child)
+                            ],
+                            key=lambda path: path.name.lower(),
+                        )
+                        should_keep_case_dir = bool(dataset_item.get("case_dir_contains_dicoms"))
+                        if nested_case_dirs and not _has_direct_cmr_sequence_dirs(case_dir) and not should_keep_case_dir:
+                            for nested_case_dir in nested_case_dirs:
+                                yielded += 1
+                                if yielded > CASE_SCAN_LIMIT:
+                                    return
+                                yield (
+                                    item["source"],
+                                    dataset_item["dataset"],
+                                    str(nested_case_dir.relative_to(dataset_dir)),
+                                    nested_case_dir,
+                                )
                             continue
                         yielded += 1
                         if yielded > CASE_SCAN_LIMIT:
                             return
-                        yield item["source"], dataset_item["dataset"], case_id, case_dir
-                    continue
-                case_dirs = sorted(
-                    [child for child in dataset_dir.iterdir() if child.is_dir() and not _is_hidden(child)],
-                    key=lambda path: path.name.lower(),
-                )
-                for case_dir in case_dirs:
-                    nested_case_dirs = sorted(
-                        [
-                            child
-                            for child in case_dir.iterdir()
-                            if child.is_dir() and not _is_hidden(child)
-                        ],
-                        key=lambda path: path.name.lower(),
-                    )
-                    should_keep_case_dir = bool(dataset_item.get("case_dir_contains_dicoms"))
-                    if nested_case_dirs and not _has_direct_cmr_sequence_dirs(case_dir) and not should_keep_case_dir:
-                        for nested_case_dir in nested_case_dirs:
-                            yielded += 1
-                            if yielded > CASE_SCAN_LIMIT:
-                                return
-                            yield (
-                                item["source"],
-                                dataset_item["dataset"],
-                                str(nested_case_dir.relative_to(dataset_dir)),
-                                nested_case_dir,
-                            )
-                        continue
-                    yielded += 1
-                    if yielded > CASE_SCAN_LIMIT:
-                        return
-                    yield item["source"], dataset_item["dataset"], case_dir.name, case_dir
+                        yield item["source"], dataset_item["dataset"], case_dir.name, case_dir
         elif item["nested_dataset"]:
             root: Path = item["root"]
             dataset_dirs = sorted(
@@ -1804,10 +1863,18 @@ def register_cvi_workstation_routes(app) -> None:
         if not CVI_WEB_DIST.is_dir():
             abort(404, "CVI workstation web bundle not found.")
 
+        def workstation_file(filename: str) -> Response:
+            response = send_from_directory(CVI_WEB_DIST, filename)
+            if filename in {"index.html", "assets/index-CVIEmbeddedPatch.js"}:
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+            return response
+
         requested = path or "index.html"
         target = CVI_WEB_DIST / requested
         if target.is_file():
-            return send_from_directory(CVI_WEB_DIST, requested)
+            return workstation_file(requested)
 
         # React BrowserRouter fallback for /cvi-workstation-app/study/...
-        return send_from_directory(CVI_WEB_DIST, "index.html")
+        return workstation_file("index.html")

@@ -346,6 +346,7 @@ class CviPrivateAssignmentGuardTest(unittest.TestCase):
             f"series/{self.PRIVATE_SERIES_ID}/image",
             f"series/{self.PRIVATE_SERIES_ID}/geometry",
             f"series/{self.PRIVATE_SERIES_ID}/role",
+            f"series/{self.PRIVATE_SERIES_ID}/tissue-lge-primary",
             f"series/{self.PRIVATE_SERIES_ID}/prompt-segment",
             f"series/{self.PRIVATE_SERIES_ID}/model-frame-segment",
             f"series/{self.PRIVATE_SERIES_ID}/propagate-neighbor",
@@ -503,6 +504,22 @@ class CviPrivateAssignmentGuardTest(unittest.TestCase):
                     )
                     self.assertIsNotNone(response)
                     self.assertEqual(response.status_code, 404)
+
+    def test_workstation_shell_and_runtime_patch_disable_stale_browser_cache(self):
+        view = self.app.view_functions["cvi_workstation"].__wrapped__
+        for path in (
+            f"study/{self.PRIVATE_STUDY_ID}/function",
+            "assets/index-CVIEmbeddedPatch.js",
+        ):
+            with self.subTest(path=path):
+                with self.app.test_request_context(f"/cvi-workstation-app/{path}"):
+                    response = view(path)
+                try:
+                    self.assertIn("no-store", response.headers.get("Cache-Control", ""))
+                    self.assertEqual(response.headers.get("Pragma"), "no-cache")
+                    self.assertEqual(response.headers.get("Expires"), "0")
+                finally:
+                    response.close()
 
     def test_proxy_stops_before_upstream_for_an_unassigned_private_study(self):
         actor = self._actor(self.unassigned_user_id)

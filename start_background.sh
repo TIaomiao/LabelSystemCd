@@ -31,7 +31,9 @@ kill_by_cwd_and_cmd "$BACKEND_DIR" "apps.api.main"
 kill_by_cwd_and_cmd "$FRONTEND_DIR" "vite"
 kill_by_cwd_and_cmd "$FRONTEND_DIR" "npm run dev"
 kill_by_cwd_and_cmd "$SHOWCASE_DIR" "next dev"
+kill_by_cwd_and_cmd "$SHOWCASE_DIR" "next start"
 kill_by_cwd_and_cmd "$SHOWCASE_DIR" "npm run dev"
+kill_by_cwd_and_cmd "$SHOWCASE_DIR" "npm run start"
 # Be careful not to kill CardiacLabUID's FRP if it shares the name, but here we target specific config if possible or just rely on process name unique enough? 
 # frpc usually looks same. Let's kill by config file if possible, or just kill all frpc for LabelSystem path.
 # For simplicity and safety given previous context, let's try to kill specific PIDs or just 'pkill -f frpc' might be too aggressive if Cardiac is running.
@@ -55,7 +57,7 @@ echo "Frontend PID: $!"
 
 echo "Starting Showcase Web..."
 cd "$SHOWCASE_DIR"
-setsid bash -lc "exec npm run dev" > "$LOG_DIR/showcase-web.log" 2>&1 < /dev/null &
+setsid bash -lc "exec npm run start -- -p 3015" > "$LOG_DIR/showcase-web.log" 2>&1 < /dev/null &
 echo "Showcase Web PID: $!"
 
 echo "Starting LabelSystem FRP..."
