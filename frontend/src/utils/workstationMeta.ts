@@ -5,9 +5,20 @@ export interface WorkstationChangeLogEntry {
 }
 
 // Update both the version and changelog entries whenever the workstation UI changes.
-export const WORKSTATION_VERSION = 'v2026.08.13-2';
+export const WORKSTATION_VERSION = 'v2026.08.15-1';
 
 export const WORKSTATION_CHANGELOG: WorkstationChangeLogEntry[] = [
+  {
+    version: 'v2026.08.15-1',
+    date: '2026-08-15',
+    items: [
+      '修复多排除区在点状微调、微调模式和整轮廓拖拽时错误复制轮廓、产生大片灰色覆盖的问题。',
+      '保存轮廓与重算指标改为确定性串行流程：等待自动保存完成后，再按最新轮廓重算并显示完成时间。',
+      '功能评估固定展示标准指标清单；缺少来源值时明确显示“未计算”，不再因病例数据不同而让整行指标消失。',
+      'CMR 勾画页和功能评估页新增“复制诊断信息”，生成不含患者身份信息的版本、浏览器、工具和加载状态反馈模板。',
+      'Mac 增加 Control+单击拖动调窗兼容；仍可通过工具栏选择窗宽窗位后使用普通左键拖动。'
+    ]
+  },
   {
     version: 'v2026.08.13-2',
     date: '2026-08-13',
