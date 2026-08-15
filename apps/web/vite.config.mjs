@@ -9,7 +9,7 @@ const sourceIndexHtml = readFileSync(sourceIndexPath, 'utf8');
 const readLegacyRuntime = (html) => {
   if (!html) return null;
   const patterns = [
-    /<script[^>]+src="[^"]*index-CVIBatchClear\.pause-progress\.js[^"]*"[^>]*><\/script>/,
+    /<script[^>]+src="[^"]*index-CVIBatchClear\.(?:pause-progress|repro-fix-v1)\.js[^"]*"[^>]*><\/script>/,
     /<script[^>]+src="[^"]*index-CVIEmbeddedPatch\.js[^"]*"[^>]*><\/script>/,
     /<link[^>]+href="[^"]*index-CVIEmbeddedCompact\.css[^"]*"[^>]*>/
   ];
@@ -17,7 +17,9 @@ const readLegacyRuntime = (html) => {
   return tags.every(Boolean) ? tags.join('\n    ') : null;
 };
 
-const currentLegacyRuntime = readLegacyRuntime(currentDistHtml) || readLegacyRuntime(sourceIndexHtml);
+// Source index is authoritative for intentional runtime upgrades. The live index
+// remains the fallback for disaster-recovery builds from an older checkout.
+const currentLegacyRuntime = readLegacyRuntime(sourceIndexHtml) || readLegacyRuntime(currentDistHtml);
 const currentBootstrap = (
   currentDistHtml.match(/<script>[\s\S]*?cvi-embedded[\s\S]*?<\/script>/)?.[0]
   || sourceIndexHtml.match(/<script>[\s\S]*?cvi-embedded[\s\S]*?<\/script>/)?.[0]
@@ -53,7 +55,7 @@ export default {
     assetsDir: 'assets',
     sourcemap: true,
     rollupOptions: {
-      external: [/^\/cvi-workstation-app\/assets\/index-CVIBatchClear\.pause-progress\.js/],
+      external: [/^\/cvi-workstation-app\/assets\/index-CVIBatchClear\.(?:pause-progress|repro-fix-v1)\.js/],
       output: {
         entryFileNames: 'assets/curvature-manual-v1-[hash].js',
         chunkFileNames: 'assets/curvature-manual-v1-[hash].js',

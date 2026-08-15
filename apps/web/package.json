@@ -8,7 +8,8 @@
     "typecheck": "node scripts/run-tool.mjs tsc -p tsconfig.json --noEmit",
     "test": "node tests/run.mjs",
     "bundle": "node scripts/run-tool.mjs vite build --config vite.config.mjs",
-    "build": "npm run typecheck && npm run test && npm run bundle && node scripts/verify-staging.mjs",
+    "patch:legacy-runtime": "node scripts/patch-legacy-runtime.mjs",
+    "build": "npm run typecheck && npm run patch:legacy-runtime && npm run test && npm run bundle && node scripts/verify-staging.mjs",
     "build:install": "npm run build && node scripts/verify-staging.mjs && node scripts/install-staging.mjs"
   },
   "devDependencies": {

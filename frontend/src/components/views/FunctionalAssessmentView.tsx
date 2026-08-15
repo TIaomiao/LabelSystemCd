@@ -37,6 +37,50 @@ interface CaseDetail {
   ai_metrics?: Record<string, number | string>;
 }
 
+type MetricReviewRow = {
+  ai: number | string | null;
+  report: number | string | null;
+  consistent: boolean;
+  comment: string;
+};
+
+const FUNCTIONAL_METRIC_ORDER = [
+  'LVEDV', 'LVESV', 'SV', 'LVEF',
+  'RVEDV', 'RVESV', 'RVEF',
+  'LAV', 'RAV',
+  'LVEDD', 'RVEDD', 'IVS', 'LVPW',
+  'LA_LR', 'LA_SI', 'RA_LR', 'RA_SI',
+  'RWT', 'SI', 'LV/RV ratio'
+];
+
+const hasOwn = (value: unknown, key: string): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key)
+);
+
+const buildMetricReviewRows = (data: CaseDetail): Record<string, MetricReviewRow> => {
+  const savedRows = data.assessment?.metrics_data && typeof data.assessment.metrics_data === 'object'
+    ? data.assessment.metrics_data as Record<string, Partial<MetricReviewRow>>
+    : {};
+  const keys = Array.from(new Set([
+    ...FUNCTIONAL_METRIC_ORDER,
+    ...Object.keys(data.report_metrics || {}),
+    ...Object.keys(data.ai_metrics || {}),
+    ...Object.keys(savedRows)
+  ]));
+
+  return Object.fromEntries(keys.map(key => {
+    const saved = savedRows[key] || {};
+    const currentAi = hasOwn(data.ai_metrics, key) ? data.ai_metrics?.[key] : saved.ai;
+    const currentReport = hasOwn(data.report_metrics, key) ? data.report_metrics?.[key] : saved.report;
+    return [key, {
+      ai: currentAi ?? null,
+      report: currentReport ?? null,
+      consistent: saved.consistent ?? true,
+      comment: saved.comment ?? ''
+    } satisfies MetricReviewRow];
+  }));
+};
+
 const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
   dataset,
   caseId,
@@ -60,7 +104,7 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
   // Form State
   const [formData, setFormData] = useState<Record<string, string | null>>({});
   // Metrics Consistency State
-  const [metricsData, setMetricsData] = useState<Record<string, { ai: any, report: any, consistent: boolean, comment: string }>>({});
+  const [metricsData, setMetricsData] = useState<Record<string, MetricReviewRow>>({});
 
   const viewerRef = useRef<HTMLDivElement>(null);
   const sequenceOrder = useMemo(
@@ -114,26 +158,9 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
         setFormData(data.assessment.answers);
       }
       
-      // Initialize Metrics Data
-      if (data.assessment && data.assessment.metrics_data) {
-          setMetricsData(data.assessment.metrics_data);
-      } else {
-          // Initialize from raw data if not saved
-          const keys = new Set<string>();
-          if (data.report_metrics) Object.keys(data.report_metrics).forEach(k => keys.add(k));
-          if (data.ai_metrics) Object.keys(data.ai_metrics).forEach(k => keys.add(k));
-          
-          const initialMetrics: any = {};
-          keys.forEach(key => {
-               initialMetrics[key] = {
-                   ai: data.ai_metrics?.[key],
-                   report: data.report_metrics?.[key],
-                   consistent: true,
-                   comment: ''
-               };
-          });
-          setMetricsData(initialMetrics);
-      }
+      // Keep the assessment table shape stable across cases and computers.
+      // Missing values remain visible as "未计算" instead of disappearing.
+      setMetricsData(buildMetricReviewRows(data));
 
     } catch (err) {
       console.error("Failed to fetch case detail", err);
@@ -173,6 +200,56 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
       }
     } catch (err) {
       message.error(t('common.error'));
+    }
+  };
+
+  const copyDiagnosticInfo = async () => {
+    const rawCaseKey = `${dataset}:${caseId}`;
+    let caseRef = 'hash-unavailable';
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawCaseKey));
+      caseRef = Array.from(new Uint8Array(digest)).slice(0, 8).map(value => value.toString(16).padStart(2, '0')).join('');
+    } catch {
+      // Keep the raw case identifier out of copied feedback even on older browsers.
+    }
+    const version = Array.from(document.querySelectorAll('span, div'))
+      .map(node => (node.textContent || '').trim())
+      .find(text => /^v\d{4}\.\d{2}\.\d{2}/.test(text)) || null;
+    const presentAi = Object.entries(metricsData).filter(([, row]) => row.ai !== null && row.ai !== undefined).map(([key]) => key);
+    const presentReport = Object.entries(metricsData).filter(([, row]) => row.report !== null && row.report !== undefined).map(([key]) => key);
+    const diagnostic = {
+      workstation_version: version,
+      page: 'functional-assessment',
+      case_ref: caseRef,
+      browser: navigator.userAgent,
+      platform: navigator.platform,
+      viewport: { width: window.innerWidth, height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio },
+      active_sequence: activeTab,
+      image_index: currentImageIndex,
+      sequence_counts: {
+        SAX: caseDetail?.images?.SAX?.length || 0,
+        '4CH': caseDetail?.images?.['4CH']?.length || 0,
+        LGE: caseDetail?.images?.LGE?.length || 0
+      },
+      metric_keys_with_ai: presentAi,
+      metric_keys_with_report: presentReport,
+      metric_keys_missing_both: FUNCTIONAL_METRIC_ORDER.filter(key => !presentAi.includes(key) && !presentReport.includes(key)),
+      saved_assessment_loaded: Boolean(caseDetail?.assessment)
+    };
+    const feedback = [
+      'CMR 功能评估问题反馈',
+      '发生前操作：',
+      '预期结果：',
+      '实际结果：',
+      '是否刷新/换电脑：',
+      '诊断信息：',
+      JSON.stringify(diagnostic, null, 2)
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(feedback);
+      message.success('诊断信息已复制，可直接粘贴到反馈群');
+    } catch {
+      message.error('浏览器未允许复制，请检查剪贴板权限');
     }
   };
 
@@ -327,10 +404,15 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
 
   const renderMetricsTable = () => {
       if (Object.keys(metricsData).length === 0) return null;
+      const extraKeys = Object.keys(metricsData).filter(key => !FUNCTIONAL_METRIC_ORDER.includes(key)).sort();
+      const orderedKeys = [...FUNCTIONAL_METRIC_ORDER.filter(key => metricsData[key]), ...extraKeys];
       
       return (
           <div style={{ marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
               <h4 style={{ margin: '0 0 12px 0', color: 'var(--accent-gold)', fontSize: '15px' }}>Quantitative Assessment</h4>
+              <div style={{ margin: '0 0 10px 0', color: 'var(--text-muted)', fontSize: '11px', lineHeight: 1.5 }}>
+                指标名称固定展示；“未计算”表示当前病例的 AI 或报告源没有提供该数值，不是电脑缺少功能。
+              </div>
               <table style={{ width: '100%', fontSize: '12px', color: 'var(--text-secondary)', borderCollapse: 'collapse' }}>
                   <thead>
                       <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
@@ -341,11 +423,11 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
                       </tr>
                   </thead>
                   <tbody>
-                      {Object.keys(metricsData).sort().map(key => (
+                      {orderedKeys.map(key => (
                           <tr key={key} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                               <td style={{ padding: '4px' }}>{key}</td>
-                              <td style={{ textAlign: 'right', padding: '4px' }}>{metricsData[key].ai ?? '-'}</td>
-                              <td style={{ textAlign: 'right', padding: '4px' }}>{metricsData[key].report ?? '-'}</td>
+                              <td style={{ textAlign: 'right', padding: '4px' }}>{metricsData[key].ai ?? '未计算'}</td>
+                              <td style={{ textAlign: 'right', padding: '4px' }}>{metricsData[key].report ?? '未计算'}</td>
                               <td style={{ textAlign: 'center', padding: '4px' }}>
                                   <input 
                                       type="checkbox" 
@@ -422,6 +504,14 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
           >
             <FaRuler />
             {t('tool.measure')}
+          </button>
+
+          <button
+            onClick={() => void copyDiagnosticInfo()}
+            style={workstationViewTheme.toolbarButton(false)}
+            title="复制不含患者信息的浏览器、版本和指标加载状态"
+          >
+            复制诊断信息
           </button>
 
           <div style={{ flex: 1 }} />
