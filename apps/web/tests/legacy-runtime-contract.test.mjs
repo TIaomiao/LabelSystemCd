@@ -8,7 +8,7 @@ const runtime = readFileSync(
   'utf8'
 );
 const mainRuntime = readFileSync(
-  new URL('../legacy-runtime/assets/index-CVIBatchClear.repro-fix-v2.js', import.meta.url),
+  new URL('../legacy-runtime/assets/index-CVIBatchClear.repro-fix-v3.js', import.meta.url),
   'utf8'
 );
 const compactCss = readFileSync(
@@ -121,6 +121,9 @@ test('manual recompute drains autosave and publishes a feedback snapshot', () =>
   assert.match(mainRuntime, /children:"复制诊断信息"/);
   assert.doesNotMatch(mainRuntime, /xprompt/);
   assert.match(mainRuntime, /window\.prompt/);
+  assert.match(mainRuntime, /发生时间：/);
+  assert.match(mainRuntime, /页面\/模块：CMR 勾画/);
+  assert.match(mainRuntime, /出现次数：必现 \/ 偶发 \/ 第一次/);
 });
 
 test('window-level gesture accepts macOS control-click as a secondary drag', () => {
@@ -136,5 +139,8 @@ test('functional assessment keeps the canonical metric rows visible', () => {
   assert.match(functionalAssessmentView, /不是电脑缺少功能/);
   assert.match(functionalAssessmentView, /metric_keys_missing_both/);
   assert.match(functionalAssessmentView, /复制诊断信息/);
+  assert.match(functionalAssessmentView, /window\.prompt\('浏览器未允许自动复制/);
+  assert.match(functionalAssessmentView, /页面\/模块：功能评估/);
+  assert.match(functionalAssessmentView, /出现次数：必现 \/ 偶发 \/ 第一次/);
   assert.doesNotMatch(functionalAssessmentView, /Object\.keys\(metricsData\)\.sort\(\)\.map/);
 });

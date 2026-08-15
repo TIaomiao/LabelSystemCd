@@ -16,7 +16,7 @@ const live = existsSync(liveIndexPath) ? readFileSync(liveIndexPath, 'utf8') : '
 const assets = readdirSync(stagingAssetsPath);
 
 const legacyReferences = (html) => [
-  html.match(/src="([^"]*index-CVIBatchClear\.(?:pause-progress|repro-fix-v[12])\.js[^"]*)"/)?.[1],
+  html.match(/src="([^"]*index-CVIBatchClear\.(?:pause-progress|repro-fix-v[123])\.js[^"]*)"/)?.[1],
   html.match(/src="([^"]*index-CVIEmbeddedPatch\.js[^"]*)"/)?.[1],
   html.match(/href="([^"]*index-CVIEmbeddedCompact\.css[^"]*)"/)?.[1]
 ];
@@ -37,6 +37,7 @@ for (const required of [
   'index-CVIBatchClear.pause-progress.js',
   'index-CVIBatchClear.repro-fix-v1.js',
   'index-CVIBatchClear.repro-fix-v2.js',
+  'index-CVIBatchClear.repro-fix-v3.js',
   'index-CVIEmbeddedPatch.js',
   'index-CVIEmbeddedCompact.css'
 ]) {

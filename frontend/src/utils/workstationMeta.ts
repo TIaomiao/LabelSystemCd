@@ -5,9 +5,18 @@ export interface WorkstationChangeLogEntry {
 }
 
 // Update both the version and changelog entries whenever the workstation UI changes.
-export const WORKSTATION_VERSION = 'v2026.08.15-2';
+export const WORKSTATION_VERSION = 'v2026.08.15-3';
 
 export const WORKSTATION_CHANGELOG: WorkstationChangeLogEntry[] = [
+  {
+    version: 'v2026.08.15-3',
+    date: '2026-08-15',
+    items: [
+      '勾画页和功能评估页的“复制诊断信息”统一补全发生时间、页面/模块和出现次数字段。',
+      '功能评估页在浏览器拒绝剪贴板权限时，改为弹出可手动复制的诊断信息框。',
+      '使用新的冻结运行时文件和缓存版本，保留 v2 作为可回滚快照。'
+    ]
+  },
   {
     version: 'v2026.08.15-2',
     date: '2026-08-15',

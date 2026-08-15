@@ -238,9 +238,12 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
     };
     const feedback = [
       'CMR 功能评估问题反馈',
+      `发生时间：${new Date().toLocaleString()}`,
+      '页面/模块：功能评估',
       '发生前操作：',
       '预期结果：',
       '实际结果：',
+      '出现次数：必现 / 偶发 / 第一次',
       '是否刷新/换电脑：',
       '诊断信息：',
       JSON.stringify(diagnostic, null, 2)
@@ -249,7 +252,7 @@ const FunctionalAssessmentView: React.FC<FunctionalAssessmentViewProps> = ({
       await navigator.clipboard.writeText(feedback);
       message.success('诊断信息已复制，可直接粘贴到反馈群');
     } catch {
-      message.error('浏览器未允许复制，请检查剪贴板权限');
+      window.prompt('浏览器未允许自动复制，请手动复制以下诊断信息：', feedback);
     }
   };
 

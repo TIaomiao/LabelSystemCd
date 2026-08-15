@@ -9,7 +9,7 @@ const sourceIndexHtml = readFileSync(sourceIndexPath, 'utf8');
 const readLegacyRuntime = (html) => {
   if (!html) return null;
   const patterns = [
-    /<script[^>]+src="[^"]*index-CVIBatchClear\.(?:pause-progress|repro-fix-v[12])\.js[^"]*"[^>]*><\/script>/,
+    /<script[^>]+src="[^"]*index-CVIBatchClear\.(?:pause-progress|repro-fix-v[123])\.js[^"]*"[^>]*><\/script>/,
     /<script[^>]+src="[^"]*index-CVIEmbeddedPatch\.js[^"]*"[^>]*><\/script>/,
     /<link[^>]+href="[^"]*index-CVIEmbeddedCompact\.css[^"]*"[^>]*>/
   ];
@@ -55,7 +55,7 @@ export default {
     assetsDir: 'assets',
     sourcemap: true,
     rollupOptions: {
-      external: [/^\/cvi-workstation-app\/assets\/index-CVIBatchClear\.(?:pause-progress|repro-fix-v[12])\.js/],
+      external: [/^\/cvi-workstation-app\/assets\/index-CVIBatchClear\.(?:pause-progress|repro-fix-v[123])\.js/],
       output: {
         entryFileNames: 'assets/curvature-manual-v1-[hash].js',
         chunkFileNames: 'assets/curvature-manual-v1-[hash].js',
