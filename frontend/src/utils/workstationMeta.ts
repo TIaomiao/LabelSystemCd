@@ -5,9 +5,17 @@ export interface WorkstationChangeLogEntry {
 }
 
 // Update both the version and changelog entries whenever the workstation UI changes.
-export const WORKSTATION_VERSION = 'v2026.08.15-1';
+export const WORKSTATION_VERSION = 'v2026.08.15-2';
 
 export const WORKSTATION_CHANGELOG: WorkstationChangeLogEntry[] = [
+  {
+    version: 'v2026.08.15-2',
+    date: '2026-08-15',
+    items: [
+      '修复浏览器拒绝剪贴板权限时“复制诊断信息”的手动复制兜底。',
+      '刷新 CMR 主运行时缓存版本，确保 Mac Control+单击拖动调窗兼容补丁被加载。'
+    ]
+  },
   {
     version: 'v2026.08.15-1',
     date: '2026-08-15',

@@ -8,7 +8,7 @@ const runtime = readFileSync(
   'utf8'
 );
 const mainRuntime = readFileSync(
-  new URL('../legacy-runtime/assets/index-CVIBatchClear.repro-fix-v1.js', import.meta.url),
+  new URL('../legacy-runtime/assets/index-CVIBatchClear.repro-fix-v2.js', import.meta.url),
   'utf8'
 );
 const compactCss = readFileSync(
@@ -119,6 +119,8 @@ test('manual recompute drains autosave and publishes a feedback snapshot', () =>
   assert.match(mainRuntime, /window\.__cviBuildDiagnosticSnapshot/);
   assert.match(mainRuntime, /exclude_region_count:x/);
   assert.match(mainRuntime, /children:"复制诊断信息"/);
+  assert.doesNotMatch(mainRuntime, /xprompt/);
+  assert.match(mainRuntime, /window\.prompt/);
 });
 
 test('window-level gesture accepts macOS control-click as a secondary drag', () => {
