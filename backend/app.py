@@ -133,12 +133,34 @@ app.config['CVI_LIBRARY_MULTICENTER_ROOTS'] = [
         'label': '上海仁济医院-HCM',
         'path': '/home/Larry/data/CMR_RenJi/HCM_extracted/给云南图像',
         'case_dir_contains_dicoms': True,
+        'case_search_alias_manifest': os.environ.get(
+            'CMR_RENJI_HCM_CASE_ALIAS_MANIFEST',
+            os.path.join(
+                os.path.dirname(app.root_path),
+                'private_manifests',
+                'renji_case_search',
+                'renji_hcm_case_aliases.csv',
+            ),
+        ),
+        'primary_id_field': 'radiology_number',
+        'primary_id_label': '放射编号',
     },
     {
         'dataset': 'CMR_RenJi_MI',
         'label': '上海仁济医院-MI',
         'path': '/home/Larry/data/CMR_RenJi/心肌梗死200例_extracted/昆医二院',
         'case_dir_contains_dicoms': True,
+        'case_search_alias_manifest': os.environ.get(
+            'CMR_RENJI_MI_CASE_ALIAS_MANIFEST',
+            os.path.join(
+                os.path.dirname(app.root_path),
+                'private_manifests',
+                'renji_case_search',
+                'renji_mi_case_aliases.csv',
+            ),
+        ),
+        'primary_id_field': 'registration_number',
+        'primary_id_label': '登记号',
     },
 ]
 _demo_case_root = os.environ.get('LABELSYSTEM_DEMO_CASE_ROOT', '').strip()

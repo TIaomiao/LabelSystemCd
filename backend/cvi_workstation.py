@@ -990,6 +990,9 @@ def _source_roots() -> list[dict]:
                 "case_dir_depth": item.get("case_dir_depth"),
                 "case_id_manifest": item.get("case_id_manifest"),
                 "case_id_prefix": item.get("case_id_prefix"),
+                "case_search_alias_manifest": item.get("case_search_alias_manifest"),
+                "primary_id_field": item.get("primary_id_field"),
+                "primary_id_label": item.get("primary_id_label"),
                 "private_by_assignment": _config_flag_enabled(item.get("private_by_assignment")),
             }
         )
@@ -1285,6 +1288,61 @@ def _case_id_manifest_map(dataset_item: dict) -> dict[str, str]:
     return _case_manifest_index(dataset_item)["relative_to_case_id"]
 
 
+def _case_alias_index(dataset_item: dict) -> dict[str, dict[str, str]]:
+    manifest_text = str(dataset_item.get("case_search_alias_manifest") or "").strip()
+    if not manifest_text:
+        return {}
+
+    manifest_path = Path(manifest_text).expanduser()
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Case search alias manifest is unavailable for {dataset_item['dataset']}")
+
+    cache_key = f"alias:{manifest_path.resolve()}"
+    modified_ns = manifest_path.stat().st_mtime_ns
+    cached = CASE_MANIFEST_CACHE.get(cache_key)
+    if cached and cached[0] == modified_ns:
+        return cached[1]
+
+    case_id_to_record: dict[str, dict[str, str]] = {}
+    searchable_fields = (
+        "radiology_number",
+        "registration_number",
+        "accession_number",
+        "patient_id",
+        "study_id",
+        "study_date",
+        "study_instance_uid",
+    )
+    try:
+        with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                case_id = str(row.get("case_id") or "").strip()
+                if not case_id:
+                    continue
+                case_id_to_record[case_id] = {
+                    field: str(row.get(field) or "").strip()
+                    for field in searchable_fields
+                }
+    except OSError as exc:
+        raise RuntimeError(f"Could not read case search alias manifest for {dataset_item['dataset']}") from exc
+
+    if not case_id_to_record:
+        raise RuntimeError(f"Case search alias manifest has no usable mappings for {dataset_item['dataset']}")
+    CASE_MANIFEST_CACHE[cache_key] = (modified_ns, case_id_to_record)
+    return case_id_to_record
+
+
+def _case_search_records(dataset_item: dict) -> dict[str, dict[str, str]]:
+    records: dict[str, dict[str, str]] = {}
+    if dataset_item.get("case_id_manifest"):
+        for case_id, record in _case_manifest_index(dataset_item)["case_id_to_record"].items():
+            records[case_id] = dict(record)
+    if dataset_item.get("case_search_alias_manifest"):
+        for case_id, record in _case_alias_index(dataset_item).items():
+            records.setdefault(case_id, {}).update(record)
+    return records
+
+
 def _configured_dataset_item(dataset: str) -> dict | None:
     canonical = _canonical_dataset(dataset)
     for item in _configured_functional_datasets():
@@ -1325,10 +1383,10 @@ def _manifest_search_matches(dataset_filters: list[str] | None, search: str) -> 
         dataset = str(dataset_item.get("dataset") or "")
         if selected and _canonical_dataset(dataset) not in selected:
             continue
-        if not dataset_item.get("case_id_manifest"):
+        if not dataset_item.get("case_id_manifest") and not dataset_item.get("case_search_alias_manifest"):
             continue
         case_matches = set()
-        for case_id, record in _case_manifest_index(dataset_item)["case_id_to_record"].items():
+        for case_id, record in _case_search_records(dataset_item).items():
             values = [case_id, *record.values()]
             if any(needle in value.casefold() for value in values if value):
                 case_matches.add(case_id)
@@ -1580,6 +1638,15 @@ def _case_display_identity(dataset: str, case_id: str) -> dict[str, str]:
                 "primary_id": registration_id,
             }
     dataset_item = _configured_dataset_item(dataset)
+    if dataset_item and dataset_item.get("case_search_alias_manifest"):
+        record = _case_alias_index(dataset_item).get(case_id, {})
+        primary_field = str(dataset_item.get("primary_id_field") or "").strip()
+        primary_id = str(record.get(primary_field) or "").strip()
+        if primary_id:
+            return {
+                "primary_id_label": str(dataset_item.get("primary_id_label") or "编号").strip(),
+                "primary_id": primary_id,
+            }
     if dataset_item and dataset_item.get("case_id_manifest"):
         record = _case_manifest_index(dataset_item)["case_id_to_record"].get(case_id, {})
         registration_id = str(record.get("patient_id") or "").strip()

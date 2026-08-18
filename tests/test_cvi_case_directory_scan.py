@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from flask import Flask
 
@@ -11,6 +12,7 @@ sys.path.insert(0, "backend")
 
 from cvi_workstation import (
     _case_display_identity,
+    _catalog_payload,
     _configured_functional_datasets,
     _iter_case_dirs,
     _looks_like_dicom,
@@ -65,6 +67,95 @@ def test_deep_case_directories_use_anonymous_manifest_ids(tmp_path):
             "primary_id_label": "登记号",
             "primary_id": "REG-001",
         }
+
+
+def test_case_search_aliases_keep_existing_case_ids_and_filter_unauthorized_rows(tmp_path):
+    root = tmp_path / "renji"
+    first_case = root / "existing-case-a"
+    second_case = root / "existing-case-b"
+    first_case.mkdir(parents=True)
+    second_case.mkdir(parents=True)
+    alias_manifest = tmp_path / "renji_case_aliases.csv"
+    with alias_manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["case_id", "registration_number", "accession_number", "patient_id", "study_date"],
+        )
+        writer.writeheader()
+        writer.writerow({
+            "case_id": "existing-case-a",
+            "registration_number": "REG-A",
+            "accession_number": "ACC-A",
+            "patient_id": "PID-A",
+            "study_date": "2026-01-01",
+        })
+        writer.writerow({
+            "case_id": "existing-case-b",
+            "registration_number": "REG-B",
+            "accession_number": "ACC-B",
+            "patient_id": "PID-B",
+            "study_date": "2026-01-02",
+        })
+
+    app = Flask(__name__)
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite://"
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["DATA_ROOT"] = str(tmp_path / "missing")
+    app.config["CVI_LIBRARY_MULTICENTER_ROOTS"] = [{
+        "dataset": "CMR_RenJi_MI",
+        "label": "RenJi MI",
+        "path": str(root),
+        "case_dir_contains_dicoms": True,
+        "case_search_alias_manifest": str(alias_manifest),
+        "primary_id_field": "registration_number",
+        "primary_id_label": "登记号",
+    }]
+    db.init_app(app)
+
+    with app.app_context():
+        db.create_all()
+        rows = list(_iter_case_dirs("functional", ["CMR_RenJi_MI"]))
+        assert [(dataset, case_id) for _, dataset, case_id, _ in rows] == [
+            ("CMR_RenJi_MI", "existing-case-a"),
+            ("CMR_RenJi_MI", "existing-case-b"),
+        ]
+        db.session.add_all([
+            CviCaseCatalog(
+                source="functional",
+                dataset="CMR_RenJi_MI",
+                case_id="existing-case-a",
+                full_id="CMR_RenJi_MI/existing-case-a",
+                path=str(first_case),
+            ),
+            CviCaseCatalog(
+                source="functional",
+                dataset="CMR_RenJi_MI",
+                case_id="existing-case-b",
+                full_id="CMR_RenJi_MI/existing-case-b",
+                path=str(second_case),
+            ),
+        ])
+        db.session.commit()
+
+        assert _manifest_search_matches(["CMR_RenJi_MI"], "REG-A") == {
+            "CMR_RenJi_MI": {"existing-case-a"}
+        }
+        assert _manifest_search_matches(["CMR_RenJi_MI"], "ACC-B") == {
+            "CMR_RenJi_MI": {"existing-case-b"}
+        }
+        assert _case_display_identity("CMR_RenJi_MI", "existing-case-a") == {
+            "primary_id_label": "登记号",
+            "primary_id": "REG-A",
+        }
+        selection = {
+            "query_source": "functional",
+            "dataset_filters": ["CMR_RenJi_MI"],
+            "case_ids": None,
+        }
+        with patch("cvi_workstation._user_can_access_case", side_effect=lambda _, __, case_id: case_id == "existing-case-a"), \
+                patch("cvi_workstation._cvi_library_options", return_value=[]):
+            payload = _catalog_payload(selection, "REG", 20)
+        assert [item["case_id"] for item in payload["items"]] == ["existing-case-a"]
 
 
 class CatalogShapeTest(unittest.TestCase):
