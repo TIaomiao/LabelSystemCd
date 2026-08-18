@@ -139,6 +139,9 @@ const studyDateFromCase = (caseItem?: CviCase | null) => {
 
 const caseDisplayName = (caseItem?: CviCase | null, fallback = '匿名病例') => {
   if (!caseItem) return fallback;
+  if (caseItem.primary_id_label && caseItem.primary_id) {
+    return `${caseItem.primary_id_label}：${caseItem.primary_id}`;
+  }
   const registrationId = registrationIdFromCase(caseItem);
   if (registrationId) {
     return `登记号：${registrationId}`;
@@ -618,7 +621,9 @@ const UnifiedWorkstationPage: React.FC = () => {
             </button>
           </div>
           <div className="uws-case-meta">
-            {registrationIdFromCase(caseItem) ? `${caseItem.anon_label || '匿名病例'} / ` : ''}
+            {caseItem.dataset === 'CMR_ALL' && registrationIdFromCase(caseItem)
+              ? `${caseItem.anon_label || '匿名病例'} / `
+              : ''}
             {studyDateFromCase(caseItem) ? `${studyDateFromCase(caseItem)} / ` : ''}
             {sourceLabel[caseItem.source] || caseItem.source} / {caseItem.dataset}
           </div>
