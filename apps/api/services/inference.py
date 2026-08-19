@@ -876,6 +876,13 @@ def _has_self_intersection(points: list[tuple[float, float]], closed: bool) -> b
 
 
 def _validate_contours_for_save(payload: dict) -> None:
+    """Self-intersection check downgraded to warn-only (2026-08-19).
+
+    手绘排除区等自由笔迹很容易轻微自碰，此前这里直接 raise 导致保存被 400 拒绝，
+    重算指标流程的第一步（保存）失败，指标永远不更新。自交多边形光栅化不会崩溃，
+    结果按 even-odd 规则可预期，且前端有填充蒙层可供医生肉眼核对，
+    因此改为记录警告并照常保存。
+    """
     frames = payload.get("frames") if isinstance(payload, dict) else None
     if not isinstance(frames, dict):
         return
@@ -890,7 +897,11 @@ def _validate_contours_for_save(payload: dict) -> None:
                 continue
             points = _contour_points(contour)
             if _has_self_intersection(points, closed=True):
-                raise ValueError(f"轮廓 {frame_key}/{contour_key} 存在自交，请撤销或重画后再保存。")
+                logger.warning(
+                    "Self-intersecting contour saved anyway series frame=%s contour=%s",
+                    frame_key,
+                    contour_key,
+                )
         raw_regions = frame_payload.get(EXCLUDE_REGIONS_KEY)
         if not isinstance(raw_regions, list):
             continue
@@ -899,7 +910,11 @@ def _validate_contours_for_save(payload: dict) -> None:
                 continue
             points = _contour_points(contour)
             if _has_self_intersection(points, closed=True):
-                raise ValueError(f"轮廓 {frame_key}/exclude_regions[{region_index}] 存在自交，请撤销或重画后再保存。")
+                logger.warning(
+                    "Self-intersecting contour saved anyway frame=%s exclude_regions[%d]",
+                    frame_key,
+                    region_index,
+                )
 
 
 def _read_contours_for_update(conn, series_id: int, module: str) -> tuple[dict | None, str | None]:
