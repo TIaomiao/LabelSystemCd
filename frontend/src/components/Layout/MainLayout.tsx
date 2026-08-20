@@ -1,5 +1,5 @@
 import React from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -56,6 +56,22 @@ const MainLayout: React.FC = () => {
              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
                 {user?.username}{user?.email ? ` · ${user.email}` : ''}
              </span>
+             <Link
+                to="/settings"
+                title="设置 / 修改密码"
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '12px',
+                  backgroundColor: 'transparent',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-secondary)',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  textDecoration: 'none'
+                }}
+              >
+                设置
+              </Link>
              <button 
                 onClick={logout}
                 style={{

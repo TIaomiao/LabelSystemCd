@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   FaBrain,
   FaChartBar,
@@ -290,7 +290,11 @@ const UnifiedWorkstationPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const canViewFeedbackDashboard = !!user?.is_admin || user?.username === 'ziantestpov';
-  const [selectedModule, setSelectedModule] = useState<ModuleKey>('cvi');
+  const [searchParams] = useSearchParams();
+  const [selectedModule, setSelectedModule] = useState<ModuleKey>(() => {
+    const requested = searchParams.get('module');
+    return modules.some(item => item.key === requested) ? (requested as ModuleKey) : 'cvi';
+  });
   const [workstationUrl, setWorkstationUrl] = useState('/cvi-workstation-app/');
   const [cases, setCases] = useState<CviCase[]>([]);
   const [caseTotal, setCaseTotal] = useState(0);

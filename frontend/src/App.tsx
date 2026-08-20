@@ -3,7 +3,6 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import MainLayout from './components/Layout/MainLayout';
 import DashboardPage from './pages/DashboardPage';
 import SegmentationPage from './pages/SegmentationPage';
-import EvaluationPage from './pages/EvaluationPage';
 import PatientManagerPage from './pages/PatientManagerPage';
 import PatientListPage from './pages/PatientListPage';
 import FunctionalAssessmentPage from './pages/FunctionalAssessmentPage';
@@ -110,7 +109,7 @@ function App() {
             <Route path="/lge" element={<LGEAnalysisPage />} />
             <Route path="/analysis" element={<ImageAnalysisPage />} />
             <Route path="/upload" element={<UploadPage />} />
-            <Route path="/evaluation" element={<EvaluationPage />} />
+            <Route path="/evaluation" element={<Navigate to="/workstation?module=evaluation" replace />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/model" element={<ModelPage />} />
             <Route path="/experiment" element={<ExperimentResultsPage />} />

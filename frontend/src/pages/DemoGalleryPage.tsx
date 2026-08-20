@@ -194,16 +194,16 @@ const DemoGalleryPage: React.FC = () => {
       <div className="vlm-demo-shell">
         <header className="vlm-demo-hero">
           <div className="vlm-demo-hero-copy">
-            <span className="vlm-demo-eyebrow">Standalone VLM Demo</span>
-            <h1>把多智能体流程包装成一次视觉语言大模型推理</h1>
+            <span className="vlm-demo-eyebrow">CMR 报告演示</span>
+            <h1>多序列 CMR 报告生成演示</h1>
             <p>
-              用户只需要点击一个案例，系统就会展示单模型式的视觉理解、跨序列思考与报告生成过程。
-              页面独立于当前工作站，但保留最终的报告交付感。
+              选择左侧演示病例，页面依次展示多序列读取、视觉理解、跨序列对齐、征象归纳和结构化报告生成的完整过程。
+              页面风格与 CMR 工作站一致，便于对外演示时保持统一观感。
             </p>
             <div className="vlm-demo-actions">
               <a className="vlm-demo-secondary" href="/showcase/">
                 <FaArrowRight />
-                返回旧主页
+                返回主页
               </a>
               <button type="button" className="vlm-demo-primary" onClick={() => setRunVersion((value) => value + 1)}>
                 <FaMagic />
@@ -218,22 +218,22 @@ const DemoGalleryPage: React.FC = () => {
 
           <div className="vlm-demo-hero-card">
             <div className="vlm-demo-chip-row">
-              <span className="vlm-demo-chip">Visual Encoder</span>
-              <span className="vlm-demo-chip">Temporal Reasoning</span>
-              <span className="vlm-demo-chip">Report Composer</span>
+              <span className="vlm-demo-chip">多序列读取</span>
+              <span className="vlm-demo-chip">跨序列对齐</span>
+              <span className="vlm-demo-chip">结构化报告</span>
             </div>
             <div className="vlm-demo-metrics">
               <div>
-                <strong>01</strong>
-                <span>单入口案例选择</span>
+                <strong>03</strong>
+                <span>演示病例</span>
               </div>
               <div>
                 <strong>05</strong>
-                <span>连续推理阶段</span>
+                <span>处理阶段</span>
               </div>
               <div>
-                <strong>{currentCase.confidence}</strong>
-                <span>报告生成置信度</span>
+                <strong>01</strong>
+                <span>报告草稿</span>
               </div>
             </div>
           </div>
@@ -243,8 +243,8 @@ const DemoGalleryPage: React.FC = () => {
           <section className="vlm-demo-panel">
             <div className="vlm-demo-panel-head">
               <div>
-                <span className="vlm-demo-panel-kicker">Case Library</span>
-                <h2>案例入口</h2>
+                <span className="vlm-demo-panel-kicker">病例库</span>
+                <h2>演示病例</h2>
               </div>
               <FaLayerGroup />
             </div>
@@ -262,7 +262,7 @@ const DemoGalleryPage: React.FC = () => {
                       setRunVersion((value) => value + 1);
                     }}
                   >
-                    <div className="vlm-demo-case-visual" style={{ background: item.accent }}>
+                    <div className="vlm-demo-case-visual">
                       <span>{item.patient}</span>
                       <strong>{item.title}</strong>
                     </div>
@@ -287,7 +287,7 @@ const DemoGalleryPage: React.FC = () => {
           <section className="vlm-demo-panel">
             <div className="vlm-demo-panel-head">
               <div>
-                <span className="vlm-demo-panel-kicker">Single-Model Reasoning</span>
+                <span className="vlm-demo-panel-kicker">处理过程</span>
                 <h2>思考过程</h2>
               </div>
               <FaBrain />
@@ -300,8 +300,8 @@ const DemoGalleryPage: React.FC = () => {
                   <span>{currentCase.patient} · {currentCase.modality}</span>
                 </div>
                 <div className="vlm-demo-confidence">
-                  <span>confidence</span>
-                  <strong>{currentCase.confidence}</strong>
+                  <span>数据性质</span>
+                  <strong>演示数据</strong>
                 </div>
               </div>
               <p>{currentCase.question}</p>
@@ -348,7 +348,7 @@ const DemoGalleryPage: React.FC = () => {
           <section className="vlm-demo-panel">
             <div className="vlm-demo-panel-head">
               <div>
-                <span className="vlm-demo-panel-kicker">Generated Report</span>
+                <span className="vlm-demo-panel-kicker">报告输出</span>
                 <h2>结构化报告</h2>
               </div>
               <FaFileMedical />
@@ -365,7 +365,7 @@ const DemoGalleryPage: React.FC = () => {
                 <>
                   <div className="vlm-demo-report-top">
                     <div>
-                      <span>Auto Draft</span>
+                      <span>演示草稿</span>
                       <strong>{currentCase.title}</strong>
                     </div>
                     <div>
@@ -404,6 +404,11 @@ const DemoGalleryPage: React.FC = () => {
             </div>
           </section>
         </main>
+
+        <div className="vlm-demo-disclaimer">
+          说明：本页面病例、指标与报告文本均为演示数据，仅用于展示报告生成流程与页面样式，不来自真实病例，也不构成任何诊断依据。
+          查看真实病例的 AI 报告请使用工作站内的报告相关页面。
+        </div>
       </div>
     </div>
   );

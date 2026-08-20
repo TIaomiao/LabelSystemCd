@@ -9,7 +9,8 @@ import {
   FaDatabase,
   FaBrain,
   FaHeartbeat,
-  FaEnvelope
+  FaEnvelope,
+  FaCog
 } from 'react-icons/fa';
 
 const Sidebar: React.FC = () => {
@@ -40,6 +41,7 @@ const Sidebar: React.FC = () => {
     ...(showAdmin ? [{ path: '/admin/monitor', name: '系统监控', icon: <FaChartBar /> }] : []),
     ...(showAdmin ? [{ path: '/admin/llm-gateway', name: 'LLM 网关', icon: <FaBrain /> }] : []),
     ...(showAdmin ? [{ path: '/admin/users', name: '用户审核', icon: <FaUserMd /> }] : []),
+    { path: '/settings', name: '设置', icon: <FaCog /> },
     // { path: '/stats', name: t('sidebar.stats'), icon: <FaChartPie /> },
     // { path: '/cardiac', name: t('sidebar.cardiac'), icon: <FaBrain /> },
     // { path: '/upload', name: '数据上传', icon: <FaCloudUploadAlt /> },
