@@ -1932,7 +1932,193 @@
   const readInspectorTab = () => inspectorTabKey;
 
   const writeInspectorTab = (nextKey) => {
-    inspectorTabKey = nextKey === 'ai' || nextKey === 'research' ? nextKey : 'draw';
+    inspectorTabKey = ['ai', 'research', 'report'].includes(nextKey) ? nextKey : 'draw';
+  };
+
+  /* ---- Inspector「报告生成」页签（2026-08-18 新增） ---- */
+  const inspectorReportState = {
+    studyId: null,
+    loading: false,
+    status: 'idle',
+    message: '',
+    caseId: '',
+    dataset: '',
+    reportText: '',
+    renderKey: '',
+  };
+  const inspectorEvalCaseCache = {};
+
+  const inferEvalDatasetCandidates = (sourcePath) => {
+    const match = String(sourcePath || '').match(/\/home\/Larry\/data\/([^/]+)/);
+    const root = match ? match[1] : '';
+    const mapping = {
+      CMR_ALL: ['CMR_ALL', 'new_CMR_ALL'],
+      CMR_Chendu: ['new_CMR_Chendu', 'CMR_Chendu'],
+      CMR_SCS: ['new_CMR_SCS', 'CMR_SCS'],
+      CMR_YA: ['new_CMR_YA', 'CMR_YA'],
+    };
+    if (mapping[root]) return mapping[root];
+    return root ? [root, `new_${root}`, 'CMR_ALL'] : ['CMR_ALL'];
+  };
+
+  const fetchEvalCaseList = async (dataset) => {
+    if (Array.isArray(inspectorEvalCaseCache[dataset])) {
+      return inspectorEvalCaseCache[dataset];
+    }
+    const response = await window.fetch(`/api/eval/cases?dataset=${encodeURIComponent(dataset)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const cases = await response.json();
+    if (!Array.isArray(cases)) return null;
+    inspectorEvalCaseCache[dataset] = cases;
+    return cases;
+  };
+
+  const renderInspectorReportPage = (container) => {
+    const state = inspectorReportState;
+    const key = [state.studyId, state.status, state.caseId, state.dataset, state.reportText.length, state.message].join('|');
+    if (container.dataset.cviReportRenderKey === key) return;
+    container.dataset.cviReportRenderKey = key;
+
+    const linkRow = [
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">',
+      '<a href="/showcase/report" style="display:inline-block;padding:6px 12px;border-radius:6px;background:#a3e635;color:#1a2008;font-size:12px;font-weight:700;text-decoration:none">打开报告生成页</a>',
+      '<a href="/evaluation" style="display:inline-block;padding:6px 12px;border-radius:6px;border:1px solid rgba(148,163,184,.25);color:#e8eaed;font-size:12px;font-weight:600;text-decoration:none">报告评分页</a>',
+      '</div>',
+    ].join('');
+
+    let body = '';
+    if (state.status === 'no-study') {
+      body = '<div style="color:#9aa3ad;font-size:12px;line-height:1.7">先在左侧病例库打开一例 Study，这里会显示该病例的 AI 报告与报告生成入口。</div>';
+    } else if (state.status === 'loading') {
+      body = '<div style="color:#9aa3ad;font-size:12px;line-height:1.7">正在读取当前病例的 AI 报告…</div>';
+    } else if (state.status === 'empty') {
+      body = `<div style="color:#9aa3ad;font-size:12px;line-height:1.7">${state.message || '该病例暂无已生成的 AI 报告。'}</div>`;
+    } else if (state.status === 'error') {
+      body = `<div style="color:#ff9f9f;font-size:12px;line-height:1.7">${state.message || 'AI 报告读取失败。'}</div>`;
+    } else if (state.status === 'ready') {
+      body = [
+        `<div style="color:#9aa3ad;font-size:11px;line-height:1.6;margin-bottom:6px">${state.dataset} · ${state.caseId}</div>`,
+        `<div style="white-space:pre-wrap;color:#d5dbe3;font-size:12px;line-height:1.75;max-height:56vh;overflow:auto;border:1px solid rgba(148,163,184,.14);border-radius:8px;padding:10px 12px;background:rgba(255,255,255,.02)"></div>`,
+      ].join('');
+    }
+
+    container.innerHTML = [
+      '<strong style="display:block;font-size:13px;color:#f3f5f7;margin-bottom:6px">报告生成</strong>',
+      body,
+      linkRow,
+    ].join('');
+
+    if (state.status === 'ready') {
+      const textBox = container.querySelector('[style*="white-space:pre-wrap"]');
+      if (textBox) textBox.textContent = state.reportText;
+    }
+  };
+
+  const loadInspectorReport = async (studyId) => {
+    const state = inspectorReportState;
+    state.studyId = studyId;
+    state.loading = true;
+    state.status = 'loading';
+    state.caseId = '';
+    state.dataset = '';
+    state.reportText = '';
+    state.message = '';
+    const panel = document.querySelector('.inspector > .panel');
+    const container = panel?.querySelector('.cvi-inspector-report-page');
+    if (container instanceof HTMLElement) renderInspectorReportPage(container);
+
+    try {
+      const studyResponse = await window.fetch(`${CVI_API_BASE}/studies/${studyId}`, { headers: { Accept: 'application/json' } });
+      if (!studyResponse.ok) throw new Error(`study ${studyResponse.status}`);
+      const study = await studyResponse.json();
+      // cvi-api 的 patient_id 形如「登记号：0000978064」，需要取出纯数字登记号再匹配。
+      const registrationRaw = String(study?.patient_id || '').trim();
+      const registrationMatch = registrationRaw.match(/00\d{8}/);
+      const registrationId = registrationMatch ? registrationMatch[0] : registrationRaw;
+      if (!registrationId) {
+        state.status = 'empty';
+        state.message = '当前 Study 缺少登记号，无法匹配 AI 报告。';
+        return;
+      }
+      const datasets = inferEvalDatasetCandidates(study?.source_path);
+      let matched = null;
+      let sawList = false;
+      for (const dataset of datasets) {
+        const cases = await fetchEvalCaseList(dataset);
+        if (!cases) continue;
+        sawList = true;
+        const hit = cases.find((item) => String(item?.id || '').startsWith(registrationId));
+        if (hit) {
+          matched = { dataset: hit.dataset || dataset, caseId: String(hit.id) };
+          break;
+        }
+      }
+      if (!matched) {
+        state.status = 'empty';
+        state.message = sawList
+          ? `登记号 ${registrationId} 暂无已生成的 AI 报告，可前往报告生成页生成。`
+          : '病例列表读取失败（可能未登录），请确认登录后重试。';
+        return;
+      }
+      const detailResponse = await window.fetch(
+        `/api/eval/cases/${encodeURIComponent(matched.dataset)}/${encodeURIComponent(matched.caseId)}?report_version=AI_LATEST`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (!detailResponse.ok) throw new Error(`detail ${detailResponse.status}`);
+      const detail = await detailResponse.json();
+      const report = detail?.report;
+      const text = typeof report === 'string' ? report : String(report?.text || detail?.report_text || '');
+      if (!text.trim()) {
+        state.status = 'empty';
+        state.message = '该病例的 AI 报告内容为空。';
+        state.dataset = matched.dataset;
+        state.caseId = matched.caseId;
+        return;
+      }
+      state.status = 'ready';
+      state.dataset = matched.dataset;
+      state.caseId = matched.caseId;
+      state.reportText = text;
+    } catch (error) {
+      state.status = 'error';
+      state.message = `AI 报告读取失败（${error instanceof Error ? error.message : '网络错误'}）。`;
+    } finally {
+      state.loading = false;
+      const panelNow = document.querySelector('.inspector > .panel');
+      const containerNow = panelNow?.querySelector('.cvi-inspector-report-page');
+      if (containerNow instanceof HTMLElement) renderInspectorReportPage(containerNow);
+    }
+  };
+
+  const ensureInspectorReportPage = (panel) => {
+    if (!(panel instanceof HTMLElement)) return;
+    let container = panel.querySelector(':scope > .cvi-inspector-report-page');
+    if (!(container instanceof HTMLElement)) {
+      container = document.createElement('section');
+      container.className = 'cvi-inspector-report-page';
+      container.style.cssText = 'display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid rgba(148,163,184,.14);border-radius:10px;background:rgba(255,255,255,.02)';
+      panel.appendChild(container);
+    }
+    container.dataset.cviInspectorGroup = 'report';
+    container.hidden = inspectorTabKey !== 'report';
+    if (container.hidden) return;
+
+    const studyId = getCurrentStudyId();
+    if (!studyId) {
+      inspectorReportState.studyId = null;
+      inspectorReportState.status = 'no-study';
+      renderInspectorReportPage(container);
+      return;
+    }
+    if (inspectorReportState.studyId !== studyId && !inspectorReportState.loading) {
+      loadInspectorReport(studyId);
+      return;
+    }
+    renderInspectorReportPage(container);
   };
 
   const getDirectInspectorBlocks = (panel, tabShell) => {
@@ -2036,6 +2222,12 @@
       getDirectChildElements(block).forEach((child) => setForcedInspectorVisibility(child, true));
     });
 
+    // 2026-08-18「报告生成」页签容器：显式跟随当前页签显隐，避免被上面的重置强制显示。
+    const inspectorReportPage = panel.querySelector(':scope > .cvi-inspector-report-page');
+    if (inspectorReportPage instanceof HTMLElement) {
+      setForcedInspectorVisibility(inspectorReportPage, inspectorTabKey === 'report');
+    }
+
     const syncTopActionBlock = (block) => {
       if (
         !block.matches('.inline-actions.wrap')
@@ -2135,6 +2327,16 @@
       return;
     }
 
+    // 2026-08-19：报告生成页签下隐藏除报告容器外的全部功能块，
+    // 否则会落入下方科研指标兜底分支被强制显示。
+    if (inspectorTabKey === 'report') {
+      directBlocks.forEach((block) => {
+        if (block.classList.contains('cvi-inspector-report-page')) return;
+        setForcedInspectorVisibility(block, false);
+      });
+      return;
+    }
+
     directBlocks.forEach((block) => {
       if (syncTopActionBlock(block)) return;
       if (syncMixedDrawBlock(block)) return;
@@ -2150,6 +2352,10 @@
   const classifyInspectorBlock = (block) => {
     if (!(block instanceof HTMLElement)) return 'draw';
     const text = (block.textContent || '').replace(/\s+/g, ' ').trim();
+
+    if (block.classList.contains('cvi-inspector-report-page')) {
+      return 'report';
+    }
 
     if (block.dataset.cviProxySourceHidden === '1') {
       return 'hidden';
@@ -2240,10 +2446,11 @@
       tabShell = document.createElement('section');
       tabShell.className = 'cvi-inspector-tab-shell';
       tabShell.innerHTML = [
-        '<div class="cvi-inspector-tab-bar" role="tablist" aria-label="右侧面板切换">',
+        '<div class="cvi-inspector-tab-bar" role="tablist" aria-label="右侧面板切换" style="grid-template-columns:repeat(4,minmax(0,1fr))">',
         '<button type="button" class="cvi-inspector-tab" data-cvi-inspector-tab="draw">勾画面板</button>',
         '<button type="button" class="cvi-inspector-tab" data-cvi-inspector-tab="ai">传播与AI</button>',
         '<button type="button" class="cvi-inspector-tab" data-cvi-inspector-tab="research">科研指标</button>',
+        '<button type="button" class="cvi-inspector-tab" data-cvi-inspector-tab="report">报告生成</button>',
         '</div>',
         '<div class="cvi-inspector-pages">',
         '<section class="cvi-inspector-page" data-cvi-inspector-page="draw"></section>',
@@ -2512,11 +2719,32 @@
         button.addEventListener('click', () => {
           writeInspectorTab(button.getAttribute('data-cvi-inspector-tab') || 'draw');
           syncInspectorSafeTabs(tabShell, panel);
+          ensureInspectorReportPage(panel);
         });
       });
     }
 
+    // 2026-08-18：为既有三页签外壳补齐「报告生成」页签（老页面可能已建好旧外壳）。
+    const tabBar = tabShell.querySelector('.cvi-inspector-tab-bar');
+    if (tabBar instanceof HTMLElement) {
+      tabBar.style.gridTemplateColumns = 'repeat(4, minmax(0, 1fr))';
+      if (!tabBar.querySelector('[data-cvi-inspector-tab="report"]')) {
+        const reportButton = document.createElement('button');
+        reportButton.type = 'button';
+        reportButton.className = 'cvi-inspector-tab';
+        reportButton.setAttribute('data-cvi-inspector-tab', 'report');
+        reportButton.textContent = '报告生成';
+        reportButton.addEventListener('click', () => {
+          writeInspectorTab('report');
+          syncInspectorSafeTabs(tabShell, panel);
+          ensureInspectorReportPage(panel);
+        });
+        tabBar.appendChild(reportButton);
+      }
+    }
+
     syncInspectorSafeTabs(tabShell, panel);
+    ensureInspectorReportPage(panel);
   };
 
   const getNavigatorInput = (labelText) => {
