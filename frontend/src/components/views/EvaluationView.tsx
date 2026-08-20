@@ -153,8 +153,8 @@ interface LocalEvaluationDraft {
   updated_at: string;
 }
 
-const buildEvaluationDraftStorageKey = (caseKey: string, reviewUserId?: number | null) => (
-  `evaluation-draft:${reviewUserId ?? 'self'}:${caseKey}`
+const buildEvaluationDraftStorageKey = (caseKey: string, reviewUserId?: number | null, reportVersion?: string | null) => (
+  `evaluation-draft:${reviewUserId ?? 'self'}:${caseKey}:${reportVersion || 'AI_V1'}`
 );
 
 const readEvaluationDraftFromStorage = (storageKey: string): LocalEvaluationDraft | null => {
@@ -275,6 +275,7 @@ interface CaseDetail {
   standard_report_sections?: StandardReportSections;
   saved_evaluation?: {
       score?: number; // deprecated
+      report_version?: string;
       score_coverage?: number;
       score_consistency?: number;
       score_hallucination?: number;
@@ -1474,14 +1475,16 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
     || caseDetail?.report_source?.report_version
     || caseDetail?.report_source?.latest_report_version
     || 'AI_V1';
+  const scoringReportVersion = caseDetail?.report_source?.report_version || activeReportVersion || 'AI_V1';
+  const currentEvaluationKey = `${currentCaseKey}::${scoringReportVersion}`;
   const reportVersionOptions = useMemo(() => {
     const sourceVersions = caseDetail?.report_source?.available_report_versions;
     const fallbackVersions = sourceVersions?.length ? sourceVersions : DEFAULT_REPORT_VERSION_OPTIONS;
     return sortReportVersions([...fallbackVersions, activeReportVersion]);
   }, [activeReportVersion, caseDetail?.report_source?.available_report_versions]);
   const currentDraftStorageKey = useMemo(
-    () => buildEvaluationDraftStorageKey(currentCaseKey, reviewUserId),
-    [currentCaseKey, reviewUserId],
+    () => buildEvaluationDraftStorageKey(currentCaseKey, reviewUserId, scoringReportVersion),
+    [currentCaseKey, reviewUserId, scoringReportVersion],
   );
   const quantitativeAccuracyData = useMemo(() => {
     if (quantitativeData) return quantitativeData;
@@ -1500,6 +1503,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
     const sequenceEntries = Object.entries(source.raw_sequence_paths || {});
     const availableVersions = sortReportVersions(source.available_report_versions || []);
     const selectedVersionPath = source.version_report_paths?.[source.report_version || ''];
+    const aiV2Ready = source.ai_v2_available || availableVersions.includes('AI_V2');
     return (
       <div style={{
         marginBottom: '12px',
@@ -1525,6 +1529,35 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
           {(source.warnings || []).length > 0 ? <span style={sourceBadgeStyle(false)}>有核对提醒</span> : null}
         </div>
         <div style={sourceRowStyle}><span>当前AI版本</span><span style={sourceValueStyle}>{source.report_version || 'AI_V1'}（请求：{formatRequestedReportVersion(source.requested_report_version)}）</span></div>
+        <div style={sourceRowStyle}>
+          <span>AI_V2状态</span>
+          <span style={sourceValueStyle}>
+            {aiV2Ready ? '已生成，可作为正式评分版本' : '未发现 AI_V2 report.json；需先完成受控 AI_V2 生成'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            disabled={!aiV2Ready}
+            onClick={() => setReportVersionSelection({ caseKey: currentCaseKey, version: 'AI_V2' })}
+            style={{
+              border: aiV2Ready ? '1px solid rgba(163,230,53,0.45)' : '1px solid var(--border-color)',
+              backgroundColor: aiV2Ready ? 'rgba(163,230,53,0.12)' : 'rgba(255,255,255,0.04)',
+              color: aiV2Ready ? '#bef264' : 'var(--text-muted)',
+              borderRadius: '999px',
+              padding: '5px 10px',
+              fontSize: '12px',
+              cursor: aiV2Ready ? 'pointer' : 'not-allowed',
+              fontWeight: 700,
+            }}
+            title={aiV2Ready ? '切换到 AI_V2 报告并按 AI_V2 独立保存评分' : '当前病例未找到 AI_V2 输出'}
+          >
+            查看/评分 AI_V2
+          </button>
+          <span style={{ color: 'var(--text-muted)', fontSize: '12px', alignSelf: 'center' }}>
+            当前评分保存到 {scoringReportVersion}
+          </span>
+        </div>
         <div style={sourceRowStyle}><span>报告文件</span><span style={sourceValueStyle}>{source.selected_report_path || source.selected_report_file || '—'}</span></div>
         {source.report_text_path ? <div style={sourceRowStyle}><span>报告文本</span><span style={sourceValueStyle}>{source.report_text_path}</span></div> : null}
         <div style={sourceRowStyle}><span>当前版本文件</span><span style={sourceValueStyle}>{selectedVersionPath || source.selected_report_path || '—'}</span></div>
@@ -1610,6 +1643,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
 
   useEffect(() => {
     if (dataset && caseId) {
+      setCaseDetail(null);
       setAutosaveStatus('idle');
       setDraftHydratedCaseKey('');
       setMediaDetail(null);
@@ -1628,7 +1662,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
   }, [dimensionScores, comment]);
 
   useEffect(() => {
-    if (draftHydratedCaseKey !== currentCaseKey) return;
+    if (draftHydratedCaseKey !== currentEvaluationKey) return;
     if (!hasEvaluationDraftContent(dimensionScores, comment)) {
       removeEvaluationDraftFromStorage(currentDraftStorageKey);
       return;
@@ -1638,11 +1672,10 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
       comment: String(comment || ''),
       updated_at: new Date().toISOString(),
     });
-  }, [draftHydratedCaseKey, currentCaseKey, currentDraftStorageKey, dimensionScores, comment]);
+  }, [draftHydratedCaseKey, currentEvaluationKey, currentDraftStorageKey, dimensionScores, comment]);
 
   const fetchCaseDetail = async (ds: string, id: string) => {
     const targetCaseKey = `${ds || ''}::${id || ''}`;
-    const storageKey = buildEvaluationDraftStorageKey(targetCaseKey, reviewUserId);
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -1656,6 +1689,9 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
       }
       const data = await res.json();
       setCaseDetail(data);
+      const fetchedReportVersion = data.report_source?.report_version || reportVersion || 'AI_V1';
+      const targetEvaluationKey = `${targetCaseKey}::${fetchedReportVersion}`;
+      const storageKey = buildEvaluationDraftStorageKey(targetCaseKey, reviewUserId, fetchedReportVersion);
 
       const savedScores = normalizeDimensionScores(data.saved_evaluation?.dimension_scores);
       const savedComment = String(data.saved_evaluation?.comment || '');
@@ -1687,7 +1723,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
         }
         setAutosaveStatus(hasEvaluationDraftContent(savedScores, savedComment) ? 'saved' : 'idle');
       }
-      setDraftHydratedCaseKey(targetCaseKey);
+      setDraftHydratedCaseKey(targetEvaluationKey);
     } catch (err) {
       console.error("Failed to fetch case detail", err);
     } finally {
@@ -1702,6 +1738,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
     const payload = {
       dimension_scores: dimensionScores,
       comment,
+      report_version: scoringReportVersion,
       timestamp: new Date().toISOString(),
       reviewer: 'Doctor',
     };
@@ -1763,7 +1800,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
   };
 
   useEffect(() => {
-    if (!caseDetail || loading || draftHydratedCaseKey !== currentCaseKey) return undefined;
+    if (!caseDetail || loading || draftHydratedCaseKey !== currentEvaluationKey) return undefined;
     const draftSignature = serializeEvaluationDraft(dimensionScores, comment);
     if (draftSignature === lastSavedDraftRef.current) return undefined;
 
@@ -1775,7 +1812,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
     }, 1200);
 
     return () => window.clearTimeout(timer);
-  }, [caseDetail, loading, dimensionScores, comment]);
+  }, [caseDetail, loading, draftHydratedCaseKey, currentEvaluationKey, dimensionScores, comment]);
 
   const fetchCaseQuantitative = async (ds: string, id: string) => {
     const targetCaseKey = `${ds || ''}::${id || ''}`;
@@ -1875,7 +1912,7 @@ const EvaluationView: React.FC<EvaluationViewProps> = ({ dataset, caseId, review
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           dataset: caseDetail.dataset,
-          report_version: reportVersion,
+          report_version: scoringReportVersion,
           review_user_id: reviewUserId ?? undefined,
           scored_only: exportScope === 'scored',
           cases: (exportCases || []).map((item) => ({

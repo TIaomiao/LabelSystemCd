@@ -320,12 +320,13 @@ class MediaAccessLog(db.Model):
 
 class EvaluationResult(db.Model):
     __table_args__ = (
-        db.UniqueConstraint('dataset', 'case_id', 'rater_id', name='uq_eval_result_case_rater'),
+        db.UniqueConstraint('dataset', 'case_id', 'rater_id', 'report_version', name='uq_eval_result_case_rater_version'),
     )
     id = db.Column(db.Integer, primary_key=True)
     dataset = db.Column(db.String(100), nullable=False)
     case_id = db.Column(db.String(100), nullable=False)
     rater_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    report_version = db.Column(db.String(32), nullable=False, default='AI_V1', server_default='AI_V1')
     
     # Old single score (deprecated but kept for compatibility/migration)
     score = db.Column(db.Float, nullable=True)
@@ -346,6 +347,7 @@ class EvaluationResult(db.Model):
             'id': self.id,
             'dataset': self.dataset,
             'case_id': self.case_id,
+            'report_version': self.report_version or 'AI_V1',
             'rater': self.rater.username,
             'score': self.score,
             'score_coverage': self.score_coverage,

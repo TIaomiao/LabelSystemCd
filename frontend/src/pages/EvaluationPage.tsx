@@ -13,6 +13,7 @@ interface CaseSummary {
   report_set?: boolean;
   report_set_order?: number;
   anon_label?: string;
+  has_ai_v2_report?: boolean;
 }
 
 const EvaluationPage: React.FC = () => {
@@ -232,6 +233,20 @@ const EvaluationPage: React.FC = () => {
                               </div>
                               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                                   {c.report_set_order ? `报告评分样本 #${c.report_set_order}` : t('eval.has_report')}
+                              </div>
+                              <div style={{
+                                  marginTop: '6px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  borderRadius: '999px',
+                                  padding: '3px 8px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  border: c.has_ai_v2_report ? '1px solid rgba(163,230,53,0.35)' : '1px solid rgba(148,163,184,0.25)',
+                                  backgroundColor: c.has_ai_v2_report ? 'rgba(163,230,53,0.12)' : 'rgba(148,163,184,0.08)',
+                                  color: c.has_ai_v2_report ? '#bef264' : 'var(--text-muted)'
+                              }}>
+                                  {c.has_ai_v2_report ? 'AI_V2已生成' : 'AI_V2未生成'}
                               </div>
                           </div>
                       ))}

@@ -6,7 +6,7 @@ import secrets
 from urllib.parse import quote
 from routes import register_routes
 from extensions import db, login_manager
-from models import User, FeedbackExecutionRun
+from models import User, FeedbackExecutionRun, EvaluationResult
 from feedback_recovery import recover_interrupted_feedback_investigations
 
 app = Flask(__name__)
@@ -296,8 +296,70 @@ def _ensure_user_schema():
             )
 
         eval_columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(evaluation_result)").fetchall()}
-        if eval_columns and 'dimension_scores' not in eval_columns:
-            conn.exec_driver_sql("ALTER TABLE evaluation_result ADD COLUMN dimension_scores TEXT")
+        if eval_columns:
+            old_unique_case_rater = False
+            for index_row in conn.exec_driver_sql("PRAGMA index_list(evaluation_result)").fetchall():
+                index_name = index_row[1]
+                is_unique = bool(index_row[2])
+                if not is_unique:
+                    continue
+                index_columns = [
+                    info_row[2]
+                    for info_row in conn.exec_driver_sql(f"PRAGMA index_info({index_name})").fetchall()
+                ]
+                if index_columns == ['dataset', 'case_id', 'rater_id']:
+                    old_unique_case_rater = True
+                    break
+
+            if old_unique_case_rater:
+                legacy_table = 'evaluation_result_legacy_unversioned'
+                conn.exec_driver_sql(f"DROP TABLE IF EXISTS {legacy_table}")
+                conn.exec_driver_sql(f"ALTER TABLE evaluation_result RENAME TO {legacy_table}")
+                EvaluationResult.__table__.create(bind=conn, checkfirst=True)
+                legacy_columns = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({legacy_table})").fetchall()}
+                dimension_expr = 'dimension_scores' if 'dimension_scores' in legacy_columns else "'{}'"
+                report_version_expr = (
+                    "COALESCE(NULLIF(report_version, ''), 'AI_V1')"
+                    if 'report_version' in legacy_columns
+                    else "'AI_V1'"
+                )
+                conn.exec_driver_sql(
+                    f"""
+                    INSERT INTO evaluation_result (
+                        id, dataset, case_id, rater_id, report_version, score,
+                        score_coverage, score_consistency, score_hallucination,
+                        dimension_scores, comment, created_at
+                    )
+                    SELECT
+                        id, dataset, case_id, rater_id, {report_version_expr}, score,
+                        score_coverage, score_consistency, score_hallucination,
+                        {dimension_expr}, comment, created_at
+                    FROM {legacy_table}
+                    """
+                )
+                conn.exec_driver_sql(f"DROP TABLE {legacy_table}")
+            else:
+                if 'dimension_scores' not in eval_columns:
+                    conn.exec_driver_sql("ALTER TABLE evaluation_result ADD COLUMN dimension_scores TEXT")
+                if 'report_version' not in eval_columns:
+                    conn.exec_driver_sql("ALTER TABLE evaluation_result ADD COLUMN report_version VARCHAR(32) NOT NULL DEFAULT 'AI_V1'")
+                conn.exec_driver_sql("UPDATE evaluation_result SET report_version = 'AI_V1' WHERE report_version IS NULL OR report_version = ''")
+                duplicate_versioned_result = conn.exec_driver_sql(
+                    """
+                    SELECT 1
+                    FROM evaluation_result
+                    GROUP BY dataset, case_id, rater_id, report_version
+                    HAVING COUNT(*) > 1
+                    LIMIT 1
+                    """
+                ).first()
+                if duplicate_versioned_result is None:
+                    conn.exec_driver_sql(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_result_case_rater_version
+                        ON evaluation_result(dataset, case_id, rater_id, report_version)
+                        """
+                    )
 
         audit_columns = {
             row[1]

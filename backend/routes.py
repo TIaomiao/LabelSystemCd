@@ -2035,12 +2035,15 @@ def _resolve_assessment_case_path(dataset: str, case_id: str) -> Path | None:
     return None
 
 
-def _latest_assessment_for_aliases(model_class, dataset: str, case_id: str, rater_id: int):
-    return model_class.query.filter(
+def _latest_assessment_for_aliases(model_class, dataset: str, case_id: str, rater_id: int, report_version: str | None = None):
+    query = model_class.query.filter(
         model_class.case_id == case_id,
         model_class.rater_id == rater_id,
         model_class.dataset.in_(_dataset_aliases(dataset)),
-    ).order_by(model_class.created_at.desc()).first()
+    )
+    if report_version and hasattr(model_class, 'report_version'):
+        query = query.filter(model_class.report_version == str(report_version).strip().upper())
+    return query.order_by(model_class.created_at.desc()).first()
 
 
 def _evaluation_has_content(*, score_coverage=None, score_consistency=None, score_hallucination=None, dimension_scores=None, comment=''):
@@ -6519,6 +6522,7 @@ def register_routes(app):
         rows = query.order_by(
             EvaluationResult.dataset.asc(),
             EvaluationResult.case_id.asc(),
+            EvaluationResult.report_version.asc(),
             EvaluationResult.rater_id.asc(),
             EvaluationResult.created_at.asc(),
         ).all()
@@ -6528,6 +6532,7 @@ def register_routes(app):
         writer.writerow([
             'dataset',
             'case_id',
+            'report_version',
             'rater_id',
             'rater_username',
             'score_coverage',
@@ -6541,6 +6546,7 @@ def register_routes(app):
             writer.writerow([
                 eval_result.dataset,
                 eval_result.case_id,
+                eval_result.report_version or 'AI_V1',
                 eval_result.rater_id,
                 username or '',
                 eval_result.score_coverage if eval_result.score_coverage is not None else '',
@@ -6752,7 +6758,10 @@ def register_routes(app):
     def export_eval_cases_excel():
         payload = request.get_json(silent=True) or {}
         dataset = str(payload.get('dataset') or request.args.get('dataset') or '').strip()
-        report_version = str(payload.get('report_version') or request.args.get('report_version') or 'AI_LATEST').strip().upper() or 'AI_LATEST'
+        report_version = _normalize_report_version_request(
+            payload.get('report_version') or request.args.get('report_version') or 'AI_LATEST',
+            default='AI_LATEST',
+        )
         scored_only_raw = payload.get('scored_only')
         if scored_only_raw is None:
             scored_only_raw = request.args.get('scored_only')
@@ -6791,7 +6800,7 @@ def register_routes(app):
     def create_eval_export_job():
         payload = request.get_json(silent=True) or {}
         dataset = str(payload.get('dataset') or '').strip()
-        report_version = str(payload.get('report_version') or 'AI_LATEST').strip().upper() or 'AI_LATEST'
+        report_version = _normalize_report_version_request(payload.get('report_version') or 'AI_LATEST', default='AI_LATEST')
         scored_only = bool(payload.get('scored_only'))
         submitted_cases = payload.get('cases') if isinstance(payload.get('cases'), list) else None
         cases = _normalize_eval_export_cases(dataset, submitted_cases=submitted_cases)
@@ -8387,6 +8396,14 @@ def register_routes(app):
         normalized = {str(version).strip().upper() for version in versions if str(version or '').strip()}
         return sorted(normalized, key=_report_version_rank, reverse=reverse)
 
+    def _normalize_report_version_request(value, *, default='AI_LATEST'):
+        requested = str(value or default or '').strip().upper()
+        if requested in {'LATEST', 'NEWEST', 'DEFAULT'}:
+            return 'AI_LATEST'
+        if re.fullmatch(r'AI_V\d+', requested):
+            return requested
+        return default
+
     def _collect_generated_report_versions(case_id, dataset='CMR_ALL'):
         versions = {}
         case_name = Path(str(case_id)).name
@@ -8413,6 +8430,13 @@ def register_routes(app):
     def _ai_v2_report_path(case_id):
         report_path = _ai_v2_case_dir(case_id) / 'report.json'
         return str(report_path) if report_path.exists() else None
+
+    def _resolve_saved_evaluation_report_version(case_id, requested_report_version):
+        requested_report_version = _normalize_report_version_request(requested_report_version, default='AI_V1')
+        if requested_report_version == 'AI_LATEST':
+            generated_report_versions = _collect_generated_report_versions(case_id, dataset='CMR_ALL')
+            return next(iter(generated_report_versions), None) or 'AI_V1'
+        return requested_report_version
 
     def _list_eval_cases_payload(eval_root, dataset_filter=None):
         datasets = sorted([d for d in os.listdir(eval_root) if os.path.isdir(os.path.join(eval_root, d))])
@@ -8574,9 +8598,10 @@ def register_routes(app):
         pro_path = os.path.join(case_path, 'report_pro.json')
         std_path = os.path.join(case_path, 'report.json')
         is_configured_report_set_case = _is_configured_eval_report_case(dataset, case_id)
-        requested_report_version = (request.args.get('report_version') or request.args.get('ai_version') or 'AI_LATEST').strip().upper()
-        if requested_report_version in {'LATEST', 'NEWEST', 'DEFAULT'}:
-            requested_report_version = 'AI_LATEST'
+        requested_report_version = _normalize_report_version_request(
+            request.args.get('report_version') or request.args.get('ai_version') or 'AI_LATEST',
+            default='AI_LATEST',
+        )
 
         generated_report_versions = _collect_generated_report_versions(case_id, dataset='CMR_ALL')
         ai_v2_case_dir = _ai_v2_case_dir(case_id)
@@ -8911,6 +8936,7 @@ def register_routes(app):
             dataset,
             case_id,
             effective_rater_id if effective_rater_id is not None else _effective_rater_id(),
+            report_version=report_version,
         )
         saved_evaluation = eval_result.to_dict() if eval_result else None
 
@@ -8974,9 +9000,7 @@ def register_routes(app):
         pro_path = os.path.join(case_path, 'report_pro.json')
         std_path = os.path.join(case_path, 'report.json')
         is_configured_report_set_case = _is_configured_eval_report_case(dataset, case_id)
-        requested_report_version = str(requested_report_version or 'AI_LATEST').strip().upper()
-        if requested_report_version in {'LATEST', 'NEWEST', 'DEFAULT'}:
-            requested_report_version = 'AI_LATEST'
+        requested_report_version = _normalize_report_version_request(requested_report_version, default='AI_LATEST')
 
         generated_report_versions = _collect_generated_report_versions(case_id, dataset='CMR_ALL')
         latest_generated_version = next(iter(generated_report_versions), None)
@@ -9021,6 +9045,7 @@ def register_routes(app):
             dataset,
             case_id,
             effective_rater_id if effective_rater_id is not None else _effective_rater_id(),
+            report_version=report_version,
         )
 
         return {
@@ -9174,6 +9199,10 @@ def register_routes(app):
         score_consistency = data.get('score_consistency')
         score_hallucination = data.get('score_hallucination')
         dimension_scores = data.get('dimension_scores') or {}
+        report_version = _resolve_saved_evaluation_report_version(
+            case_id,
+            data.get('report_version') or data.get('ai_version') or 'AI_V1',
+        )
         
         comment = data.get('comment', '')
         has_dimension_scores = isinstance(dimension_scores, dict) and any(
@@ -9204,6 +9233,7 @@ def register_routes(app):
                 dataset,
                 case_id,
                 effective_rater_id,
+                report_version=report_version,
             )
             if not _evaluation_has_content(
                 score_coverage=score_coverage,
@@ -9216,6 +9246,7 @@ def register_routes(app):
 
             if eval_result:
                 # Update existing
+                eval_result.report_version = report_version
                 if score_coverage is not None: eval_result.score_coverage = int(score_coverage)
                 if score_consistency is not None: eval_result.score_consistency = int(score_consistency)
                 if score_hallucination is not None: eval_result.score_hallucination = int(score_hallucination)
@@ -9227,6 +9258,7 @@ def register_routes(app):
                 eval_result = EvaluationResult(
                     dataset=dataset,
                     case_id=case_id,
+                    report_version=report_version,
                     score=0.0, # Provide default for deprecated NOT NULL field
                     score_coverage=int(score_coverage) if score_coverage is not None else None,
                     score_consistency=int(score_consistency) if score_consistency is not None else None,
