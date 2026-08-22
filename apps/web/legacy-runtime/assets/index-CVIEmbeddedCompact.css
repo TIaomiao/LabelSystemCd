@@ -634,6 +634,7 @@ html.cvi-embedded .cvi-fat-candidate-status .is-ready{border-color:rgba(87,227,1
 html.cvi-embedded .cvi-fat-candidate-status .is-missing{border-color:rgba(255,138,105,.28);background:rgba(255,138,105,.1);color:#ffd0c3}
 html.cvi-embedded .cvi-fat-threshold-retained{fill:rgba(255,207,90,.34);stroke:none}
 html.cvi-embedded .cvi-fat-threshold-excluded{fill:rgba(156,163,175,.28);stroke:none}
+html.cvi-embedded .cvi-fat-range-fill{fill:rgba(255,170,35,.36);stroke:none}
 html.cvi-embedded .cvi-lge-threshold-priority{display:flex!important;visibility:visible!important;opacity:1!important;border-color:rgba(93,124,255,.25)!important;background:rgba(93,124,255,.04)!important}
 html.cvi-embedded .cvi-lge-threshold-layer{pointer-events:none}
 html.cvi-embedded .cvi-lge-scar-preview{fill:rgba(255,78,88,.42);stroke:none}
