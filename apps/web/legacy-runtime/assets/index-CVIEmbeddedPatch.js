@@ -3289,7 +3289,7 @@
     identity: '',
     enabled: false,
     fillVisible: false,
-    fillSeriesId: null,
+    fillScopeId: '',
     lower: 0,
     upper: 255,
     preview: null,
@@ -3731,8 +3731,12 @@
       const config = active.payload?.settings?.fat_threshold;
       const frameConfig = config?.enabled ? config.frames?.[active.frameKey] : null;
       const draft = fatThresholdState.drafts.get(identity);
-      if (Number(fatThresholdState.fillSeriesId) !== Number(active.series.id)) {
-        fatThresholdState.fillSeriesId = Number(active.series.id);
+      const studyId = Number(window.__cviSeriesCache?.studyId);
+      const fillScopeId = Number.isSafeInteger(studyId) && studyId > 0
+        ? `study:${studyId}`
+        : `series:${Number(active.series.id)}`;
+      if (fatThresholdState.fillScopeId !== fillScopeId) {
+        fatThresholdState.fillScopeId = fillScopeId;
         fatThresholdState.fillVisible = false;
       }
       fatThresholdState.identity = identity;
@@ -3780,11 +3784,11 @@
       fillPanel.dataset.fatRangeHash = fillHash;
       const fillHint = fatThresholdState.fillVisible
         ? hasCandidate
-          ? '本序列显示已开启；切换到其他已勾画 slice / phase 时会自动显示。'
-          : '本序列显示仍保持开启；当前帧没有完整脂肪候选区。'
-        : '点一次后，本序列所有已勾画 slice / phase 在切换时都会自动显示。';
+          ? '本病例显示已开启；切换到其他已勾画序列、slice / phase 时会自动显示。'
+          : '本病例显示仍保持开启；当前帧没有完整脂肪候选区。'
+        : '点一次后，本病例所有已勾画序列、slice / phase 在切换时都会自动显示。';
       fillPanel.innerHTML = [
-        '<div class="cvi-fat-threshold-head"><strong>脂肪区域显示</strong><span>当前序列</span></div>',
+        '<div class="cvi-fat-threshold-head"><strong>脂肪区域显示</strong><span>当前病例</span></div>',
         '<div class="cvi-fat-candidate-status">',
         `<span class="${candidateStatus.ventricularEpi || candidateStatus.epiFallback ? 'is-ready' : 'is-missing'}">心室外膜 ${candidateStatus.ventricularEpi ? '已标注' : candidateStatus.epiFallback ? '使用 epi' : '缺失'}</span>`,
         `<span class="${candidateStatus.fatOuter ? 'is-ready' : 'is-missing'}">脂肪壁层 ${candidateStatus.fatOuter ? '已标注' : '缺失'}</span>`,
