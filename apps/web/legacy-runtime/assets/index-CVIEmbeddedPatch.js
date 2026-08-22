@@ -3289,6 +3289,7 @@
     identity: '',
     enabled: false,
     fillVisible: false,
+    fillSeriesId: null,
     lower: 0,
     upper: 255,
     preview: null,
@@ -3613,7 +3614,9 @@
       const preview = await response.json();
       if (fatThresholdState.identity !== requestIdentity) return;
       fatThresholdState.preview = preview;
-      fatThresholdState.status = '预览未保存';
+      fatThresholdState.status = fatThresholdState.enabled
+        ? '预览未保存'
+        : fatThresholdState.fillVisible ? '脂肪区域显示已开启' : '';
       renderFatThresholdOverlay();
     } catch (error) {
       fatThresholdState.preview = null;
@@ -3714,8 +3717,10 @@
   const ensureFatThresholdPanel = () => {
     const active = activeFatThresholdFrame();
     const host = getContourPanel();
+    let fillPanel = document.querySelector('.cvi-fat-range-panel');
     let panel = document.querySelector('.cvi-fat-threshold-panel');
     if (!active || !host) {
+      fillPanel?.remove();
       panel?.remove();
       removeFatThresholdOverlay();
       return;
@@ -3726,8 +3731,11 @@
       const config = active.payload?.settings?.fat_threshold;
       const frameConfig = config?.enabled ? config.frames?.[active.frameKey] : null;
       const draft = fatThresholdState.drafts.get(identity);
+      if (Number(fatThresholdState.fillSeriesId) !== Number(active.series.id)) {
+        fatThresholdState.fillSeriesId = Number(active.series.id);
+        fatThresholdState.fillVisible = false;
+      }
       fatThresholdState.identity = identity;
-      fatThresholdState.fillVisible = false;
       fatThresholdState.enabled = draft
         ? Boolean(draft.enabled)
         : Boolean(frameConfig?.enabled !== false && frameConfig);
@@ -3740,18 +3748,65 @@
         ? '已恢复本帧未保存阈值草稿'
         : fatThresholdState.enabled ? '正在恢复本帧预览...' : '';
       removeFatThresholdOverlay();
-      if (fatThresholdState.enabled) queueFatThresholdPreview();
+      if (fatThresholdState.enabled || fatThresholdState.fillVisible) queueFatThresholdPreview();
     }
 
+    if (!fillPanel) {
+      fillPanel = document.createElement('section');
+      fillPanel.className = 'tool-group cvi-fat-range-panel';
+      host.insertAdjacentElement('afterend', fillPanel);
+    }
     if (!panel) {
       panel = document.createElement('section');
       panel.className = 'tool-group cvi-fat-threshold-panel';
-      host.insertAdjacentElement('afterend', panel);
+      fillPanel.insertAdjacentElement('afterend', panel);
     }
 
     const hasCandidate = hasFatCandidateContours(active.frame, active.visibleContourKeys);
     const candidateStatus = fatCandidateContourStatus(active.frame, active.visibleContourKeys);
-    const stats = fatThresholdState.preview?.stats;
+    const thresholdPreview = fatThresholdState.enabled ? fatThresholdState.preview : null;
+    const stats = thresholdPreview?.stats;
+    const fillHash = JSON.stringify({
+      identity,
+      hasCandidate,
+      fillVisible: fatThresholdState.fillVisible,
+      loading: fatThresholdState.loading,
+      ventricularEpi: candidateStatus.ventricularEpi,
+      epiFallback: candidateStatus.epiFallback,
+      fatOuter: candidateStatus.fatOuter,
+      legacyFat: candidateStatus.legacyFat
+    });
+    if (fillPanel.dataset.fatRangeHash !== fillHash) {
+      fillPanel.dataset.fatRangeHash = fillHash;
+      const fillHint = fatThresholdState.fillVisible
+        ? hasCandidate
+          ? '本序列显示已开启；切换到其他已勾画 slice / phase 时会自动显示。'
+          : '本序列显示仍保持开启；当前帧没有完整脂肪候选区。'
+        : '点一次后，本序列所有已勾画 slice / phase 在切换时都会自动显示。';
+      fillPanel.innerHTML = [
+        '<div class="cvi-fat-threshold-head"><strong>脂肪区域显示</strong><span>当前序列</span></div>',
+        '<div class="cvi-fat-candidate-status">',
+        `<span class="${candidateStatus.ventricularEpi || candidateStatus.epiFallback ? 'is-ready' : 'is-missing'}">心室外膜 ${candidateStatus.ventricularEpi ? '已标注' : candidateStatus.epiFallback ? '使用 epi' : '缺失'}</span>`,
+        `<span class="${candidateStatus.fatOuter ? 'is-ready' : 'is-missing'}">脂肪壁层 ${candidateStatus.fatOuter ? '已标注' : '缺失'}</span>`,
+        candidateStatus.legacyFat ? '<span class="is-ready">旧脂肪 ROI 可用</span>' : '',
+        '</div>',
+        `<button type="button" class="ghost-button ${fatThresholdState.fillVisible ? 'is-active' : ''}" data-fat-range-fill ${hasCandidate || fatThresholdState.fillVisible ? '' : 'disabled'} aria-pressed="${fatThresholdState.fillVisible ? 'true' : 'false'}">${fatThresholdState.fillVisible ? '隐藏脂肪区' : '显示脂肪区'}</button>`,
+        `<p class="tool-hint">${fillHint}</p>`
+      ].join('');
+      fillPanel.querySelector('[data-fat-range-fill]')?.addEventListener('click', () => {
+        fatThresholdState.fillVisible = !fatThresholdState.fillVisible;
+        if (fatThresholdState.fillVisible) {
+          fatThresholdState.status = '脂肪区域显示已开启';
+          queueFatThresholdPreview();
+        } else {
+          removeFatThresholdOverlay();
+          fatThresholdState.status = fatThresholdState.enabled
+            ? '阈值计算仍保持启用；脂肪填色已关闭'
+            : '脂肪填色已关闭';
+        }
+        scheduleApply();
+      });
+    }
     if (fatThresholdState.dragging) return;
     const hash = JSON.stringify({
       identity,
@@ -3765,7 +3820,7 @@
       dirty: fatThresholdState.dirty,
       status: fatThresholdState.status,
       stats,
-      histogram: fatThresholdState.preview?.histogram?.counts
+      histogram: thresholdPreview?.histogram?.counts
     });
     if (panel.dataset.fatThresholdHash === hash) {
       if (fatThresholdState.preview && fatThresholdState.fillVisible && !document.querySelector('.cvi-fat-threshold-layer')) {
@@ -3777,14 +3832,8 @@
     panel.innerHTML = [
       '<div class="cvi-fat-threshold-head"><strong>脂肪灰度筛选</strong><span>当前帧 · 0–255</span></div>',
       `<label class="checkbox-row"><input type="checkbox" data-fat-threshold-enable ${fatThresholdState.enabled ? 'checked' : ''} ${hasCandidate ? '' : 'disabled'}><span>启用当前帧筛选</span></label>`,
-      '<div class="cvi-fat-candidate-status">',
-      `<span class="${candidateStatus.ventricularEpi || candidateStatus.epiFallback ? 'is-ready' : 'is-missing'}">心室外膜 ${candidateStatus.ventricularEpi ? '已标注' : candidateStatus.epiFallback ? '使用 epi' : '缺失'}</span>`,
-      `<span class="${candidateStatus.fatOuter ? 'is-ready' : 'is-missing'}">脂肪壁层 ${candidateStatus.fatOuter ? '已标注' : '缺失'}</span>`,
-      candidateStatus.legacyFat ? '<span class="is-ready">旧脂肪 ROI 可用</span>' : '',
-      '</div>',
       hasCandidate ? '' : '<p class="tool-hint">当前帧没有完整脂肪候选区，灰度筛选保持禁用。</p>',
-      `<button type="button" class="ghost-button ${fatThresholdState.fillVisible ? 'is-active' : ''}" data-fat-range-fill ${hasCandidate ? '' : 'disabled'} aria-pressed="${fatThresholdState.fillVisible ? 'true' : 'false'}">${fatThresholdState.fillVisible ? '隐藏脂肪区' : '显示脂肪区'}</button>`,
-      `<div class="cvi-fat-threshold-histogram">${renderFatThresholdHistogram(fatThresholdState.preview)}</div>`,
+      `<div class="cvi-fat-threshold-histogram">${renderFatThresholdHistogram(thresholdPreview)}</div>`,
       `<label class="field compact"><span>灰度下限</span><input type="range" min="0" max="255" step="1" value="${fatThresholdState.lower}" data-fat-threshold-lower ${fatThresholdState.enabled ? '' : 'disabled'}><small data-fat-threshold-lower-value>${Math.round(fatThresholdState.lower)}</small></label>`,
       `<label class="field compact"><span>灰度上限</span><input type="range" min="0" max="255" step="1" value="${fatThresholdState.upper}" data-fat-threshold-upper ${fatThresholdState.enabled ? '' : 'disabled'}><small data-fat-threshold-upper-value>${Math.round(fatThresholdState.upper)}</small></label>`,
       stats ? [
@@ -3800,7 +3849,7 @@
       `<button type="button" class="ghost-button" data-fat-threshold-reset ${fatThresholdState.saving ? 'disabled' : ''}>恢复本帧</button>`,
       '<button type="button" class="primary-button" data-fat-threshold-recompute>重算本序列指标</button>',
       '</div>',
-      `<p class="status">${fatThresholdState.status || '默认不填色；点击“显示脂肪区”查看两个轮廓之间的区域。'}</p>`
+      `<p class="status">${fatThresholdState.status || '拖动仅预览；保存本帧阈值后，完成整套再统一重算。'}</p>`
     ].join('');
 
     panel.querySelector('[data-fat-threshold-enable]')?.addEventListener('change', (event) => {
@@ -3815,19 +3864,6 @@
       else {
         fatThresholdState.preview = null;
         removeFatThresholdOverlay();
-      }
-      scheduleApply();
-    });
-    panel.querySelector('[data-fat-range-fill]')?.addEventListener('click', () => {
-      fatThresholdState.fillVisible = !fatThresholdState.fillVisible;
-      if (fatThresholdState.fillVisible) {
-        fatThresholdState.status = '正在生成轮廓间脂肪区域预览...';
-        queueFatThresholdPreview();
-      } else {
-        removeFatThresholdOverlay();
-        fatThresholdState.status = fatThresholdState.enabled
-          ? '阈值计算仍保持启用；脂肪填色已关闭'
-          : '脂肪填色已关闭';
       }
       scheduleApply();
     });

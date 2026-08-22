@@ -274,6 +274,8 @@ def test_fat_threshold_preview_is_non_persistent_and_returns_histogram_and_rle(m
         + stats["manual_excluded"]["pixel_count"]
     )
     assert result["masks"]["retained"]["encoding"] == "row_major_runs"
+    assert result["masks"]["candidate"]["encoding"] == "row_major_runs"
+    assert sum(run[1] for run in result["masks"]["candidate"]["runs"]) == stats["candidate"]["pixel_count"]
     assert result["masks"]["threshold_excluded"]["runs"]
 
 

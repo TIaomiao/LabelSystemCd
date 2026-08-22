@@ -215,6 +215,7 @@ def compute_fat_threshold_preview(
             "manual_excluded": mask_stats(effective_manual_exclude),
         },
         "masks": {
+            "candidate": _mask_to_rle(candidate_mask),
             "retained": _mask_to_rle(final_mask),
             "threshold_excluded": _mask_to_rle(threshold_exclude),
             "manual_excluded": _mask_to_rle(effective_manual_exclude),
