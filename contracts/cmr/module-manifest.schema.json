@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://labelsystem.local/contracts/cmr/module-manifest.schema.json",
+  "title": "CMR module manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["module_id", "contract_version", "delivery_state"],
+  "properties": {
+    "module_id": {
+      "type": "string",
+      "enum": [
+        "cine_function",
+        "cine_strain",
+        "t1_mapping",
+        "lge_t2",
+        "perfusion",
+        "flow4d"
+      ]
+    },
+    "contract_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "delivery_state": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "demo_only",
+        "technically_verified",
+        "doctor_reviewed",
+        "accepted"
+      ]
+    }
+  }
+}
