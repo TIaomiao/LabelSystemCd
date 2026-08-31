@@ -1,0 +1,52 @@
+name: CMR Governance CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/workflows/cmr-governance-ci.yml'
+      - 'apps/api/core/**'
+      - 'apps/api/modules/**'
+      - 'apps/web/src/features/**'
+      - 'contracts/cmr/**'
+      - 'docs/cmr/**'
+      - 'tests/cmr/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cmr-governance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check changed-file whitespace
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
+          else
+            git diff --check HEAD^ HEAD
+          fi
+
+      - name: Run CMR governance tests
+        run: >-
+          python -m unittest
+          tests.cmr.test_module_layout
+          tests.cmr.test_repository_safety
+
+      - name: Compile CMR Python boundaries
+        run: python -m compileall -q apps/api/core apps/api/modules tests/cmr

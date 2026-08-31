@@ -14,8 +14,11 @@ Routine production maintenance belongs to ordinary workstation issues. Lung-canc
 
 1. `ARCHITECTURE.md`
 2. `ROADMAP.md`
-3. `GIT_WORKFLOW.md`
-4. `SESSION_REGISTRY.md`
-5. The selected feature specification and status
+3. `HANDOFF_CONTRACT.md`
+4. `GIT_WORKFLOW.md`
+5. `SESSION_REGISTRY.md`
+6. The selected feature specification and status
+
+Cloud planning sessions should also use `CLOUD_PROJECT_INSTRUCTIONS.md`. Active plans live in one private GitHub issue per feature; accepted contracts and execution evidence live in this repository and its pull requests.
 
 Chat history is not the source of truth. Update these files at each handoff.

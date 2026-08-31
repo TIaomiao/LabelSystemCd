@@ -2,7 +2,7 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | demo_only | `chore/cmr-m0-governance` | pending | not applicable |
+| CMR-00 | Program control and integration | demo_only | `chore/cmr-m0-governance` / PR #1 | M0.5 local 5 tests passed; GitHub CI pending | not applicable |
 | CMR-01 | Shared foundation | planned | not created | none | architecture review |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
