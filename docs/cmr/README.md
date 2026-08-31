@@ -13,11 +13,18 @@ Routine production maintenance belongs to ordinary workstation issues. Lung-canc
 ## Read order
 
 1. `ARCHITECTURE.md`
-2. `ROADMAP.md`
-3. `HANDOFF_CONTRACT.md`
-4. `GIT_WORKFLOW.md`
-5. `SESSION_REGISTRY.md`
-6. The selected feature specification and status
+2. Relevant accepted decisions under `decisions/`
+3. `ROADMAP.md`
+4. `HANDOFF_CONTRACT.md`
+5. `GIT_WORKFLOW.md`
+6. `SESSION_REGISTRY.md`
+7. The selected feature specification and status
+
+Current repository decision:
+
+- `decisions/ADR-001-repository-boundary.md`: keep CMR product runtime code in
+  the LabelSystem monorepo for M0 and define the conditions for reconsidering a
+  split.
 
 Cloud planning sessions should also use `CLOUD_PROJECT_INSTRUCTIONS.md`. Active plans live in one private GitHub issue per feature; accepted contracts and execution evidence live in this repository and its pull requests.
 

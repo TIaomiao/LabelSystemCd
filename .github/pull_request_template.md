@@ -14,7 +14,7 @@
 
 - [ ] Targeted tests passed
 - [ ] `git diff --check` passed
-- [ ] Sensitive-data and credential scan passed
+- [ ] CMR target scopes passed the sensitive-artifact and credential-signature scan
 - [ ] CI passed
 - [ ] Cloud-planning assumptions were rechecked against the repository
 

@@ -4,7 +4,10 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'AGENTS.md'
       - '.github/ISSUE_TEMPLATE/**'
+      - '.github/copilot-instructions.md'
+      - '.github/pull_request_template.md'
       - '.github/workflows/cmr-governance-ci.yml'
       - 'apps/api/core/**'
       - 'apps/api/modules/**'

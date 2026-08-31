@@ -5,7 +5,13 @@ from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[2]
+GOVERNANCE_FILES = (
+    "AGENTS.md",
+    ".github/copilot-instructions.md",
+    ".github/pull_request_template.md",
+)
 CMR_SCOPES = (
+    *GOVERNANCE_FILES,
     ".github/ISSUE_TEMPLATE",
     ".github/workflows/cmr-governance-ci.yml",
     "apps/api/core",
@@ -49,6 +55,14 @@ def tracked_cmr_files():
 
 
 class CmrRepositorySafetyTest(unittest.TestCase):
+    def test_governance_workflow_watches_governance_files(self):
+        workflow = (ROOT / ".github/workflows/cmr-governance-ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for relative_path in GOVERNANCE_FILES:
+            with self.subTest(path=relative_path):
+                self.assertIn(f"- '{relative_path}'", workflow)
+
     def test_no_disallowed_tracked_artifact_types(self):
         violations = []
         for path in tracked_cmr_files():
