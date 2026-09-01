@@ -57,3 +57,6 @@ jobs:
 
       - name: Verify session status board is current
         run: python scripts/cmr/render_status_board.py --check
+
+      - name: Verify external context packet is current
+        run: python scripts/cmr/render_context_packet.py --check

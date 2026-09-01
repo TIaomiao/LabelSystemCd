@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/cmr"))
 import render_status_board  # noqa: E402
+import render_context_packet  # noqa: E402
 
 
 class StatusBoardTest(unittest.TestCase):
@@ -20,6 +21,14 @@ class StatusBoardTest(unittest.TestCase):
         self.assertIn("f52a53d", rendered)
         self.assertNotIn("/home/", rendered)
         self.assertNotIn("C:\\\\", rendered)
+
+    def test_context_packet_is_model_readable_and_sanitized(self):
+        statuses = render_status_board.collect_statuses(ROOT)
+        packet = render_context_packet.render_packet(statuses)
+        self.assertIn("CMR-00", packet)
+        self.assertIn("唯一下一步", packet)
+        self.assertNotIn("/home/", packet)
+        self.assertNotIn("C:\\\\", packet)
 
     def test_malformed_state_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -10,6 +10,8 @@
 4. 目标功能 `STATUS.md`、`SPEC.md`、`CLINICAL_CONTRACT.md`、`ACCEPTANCE.md`；
 5. 最近一次相关 PR 和测试结果。
 
+若外部平台不能读取私有仓库，先提供自动生成的 `docs/cmr/dashboard/CONTEXT_PACKET.md`；它只用于恢复脱敏状态，具体实现仍必须回到仓库、Issue、PR和测试核验。
+
 结束时只回写：功能 `STATUS.md`、代码 commit、测试证据和 GitHub Issue/PR 链接。不要把完整聊天记录复制进仓库，也不要让看板维护第二套状态。
 
 ## 建议的任务分工
