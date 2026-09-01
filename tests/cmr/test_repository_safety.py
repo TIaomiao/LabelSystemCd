@@ -19,6 +19,7 @@ CMR_SCOPES = (
     "apps/web/src/features",
     "contracts/cmr",
     "docs/cmr",
+    "scripts/cmr",
     "tests/cmr",
 )
 DISALLOWED_NAMES = {".env", "secret_key", "id_rsa", "id_ed25519"}
