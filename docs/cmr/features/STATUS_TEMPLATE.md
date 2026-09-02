@@ -24,7 +24,9 @@
   "physician_review": {"state": "not_scheduled", "cases": []},
   "blockers": [],
   "next_action": "填写本功能的临床契约和验收条件",
-  "evidence_refs": ["docs/cmr/features/CMR-XX/SPEC.md"]
+  "evidence_refs": ["docs/cmr/features/CMR-XX/SPEC.md"],
+  "formal_gates": [],
+  "historical_evidence": []
 }
 cmr-status -->
 

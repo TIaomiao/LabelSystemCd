@@ -34,6 +34,7 @@ Cloud planning sessions should also use `CLOUD_PROJECT_INSTRUCTIONS.md`. Active 
 
 - `features/<session>/STATUS.md`：每个 session 的机器可读状态和人类摘要；
 - `features/STATUS_TEMPLATE.md`：新功能复制的状态模板；
+- `CODEX_TASK_REGISTRY.json`：人工筛选的 CMR 产品 Codex 对话追溯表，只保存任务ID、标题、对应session和状态快照；
 - `dashboard/index.html`：由 `scripts/cmr/render_status_board.py` 生成的只读、自包含看板；
 - `dashboard/README.md`：本地打开和 GitHub Pages 隐私边界。
 

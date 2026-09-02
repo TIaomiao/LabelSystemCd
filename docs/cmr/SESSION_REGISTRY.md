@@ -2,7 +2,7 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1 | `fad0529`: local 5 tests passed; GitHub CI 2/2 passed (screenshot, 2026-08-31); engineering review pending | not applicable |
+| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1；Cockpit `feat/cmr-session-cockpit-mvp` | 当前PR头 `f52a53d`：本地6项治理检查通过，GitHub当前头CI待确认；旧头 `fad0529` 曾2/2；Cockpit基线 `ca3338b` 10项通过、未推送 | not applicable |
 | CMR-01 | Shared foundation | planned | not created | none | architecture review |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
@@ -18,8 +18,16 @@ Each handoff must record scope, branch, worktree, baseline tag, last commit, imp
 - The 2026-08-31 PR screenshot records `All checks have passed` with two
   successful checks at `fad0529`. The repository contains one job in each of
   the CMR Governance and Workstation workflows; both are required for this PR.
+- The current PR head is `f52a53d`. Its checks, review and merge state remain
+  unverified until they are read from the authenticated GitHub page; the
+  `fad0529` screenshot is historical evidence only.
 - The push credential used for this PR was verified directly on the transfer
   account with `ssh -T git@github.com`, which authenticated as `LarryUESTC`.
   Commit author/committer identity is separately configured as `Codex-Backup`.
-- A personal GitHub SSH key and consistent `user.name`/`user.email` for
-  `TIaomiao` remain an M0.1 identity-governance task and do not block M0 review.
+- The `TIaomiao` server SSH key was created and manually authenticated on
+  2026-09-02. It is passphrase-protected, so unattended push remains disabled
+  until the builder unlocks it interactively. Consistent `user.name`/`user.email`
+  remains an M0.1 identity-governance task.
+- Cockpit baseline `ca3338b` passed 10 tests plus both generated-artifact
+  checks and has a verified recovery bundle. Its remote branch and PR are not
+  yet created.
