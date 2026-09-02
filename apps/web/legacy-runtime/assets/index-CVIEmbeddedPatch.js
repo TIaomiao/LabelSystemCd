@@ -3615,7 +3615,7 @@
       if (fatThresholdState.identity !== requestIdentity) return;
       fatThresholdState.preview = preview;
       fatThresholdState.status = fatThresholdState.enabled
-        ? '预览未保存'
+        ? (fatThresholdState.dirty ? '预览未保存' : '本帧阈值已保存')
         : fatThresholdState.fillVisible ? '脂肪区域显示已开启' : '';
       renderFatThresholdOverlay();
     } catch (error) {
