@@ -1,0 +1,83 @@
+{
+  "contract_version": "1.0.0",
+  "result_id": "syn-result-lv-ef",
+  "result_fingerprint": "sha256:742bb931e5e2b7d0dfcf8e4a23c6a3728485f54991abe1db03d58eddacfaf7ea",
+  "metric": {
+    "metric_id": "cine.lv_ef",
+    "display_name": "Synthetic LV ejection fraction"
+  },
+  "value": {
+    "state": "computed",
+    "unit": { "system": "UCUM", "code": "%" },
+    "scalar": 61.5
+  },
+  "sources": {
+    "series": [
+      {
+        "series_ref": "syn-series-cine-sax",
+        "series_version": "frames-v1",
+        "role": "source.cine_sax"
+      }
+    ],
+    "selectors": [
+      {
+        "series_ref": "syn-series-cine-sax",
+        "slices": { "mode": "indices", "indices": [0, 1, 2] },
+        "phases": { "mode": "indices", "indices": [0, 10] }
+      }
+    ]
+  },
+  "roi_context": {
+    "usage": "referenced",
+    "roi_refs": [
+      {
+        "roi_ref": "syn-roi-lv-endo",
+        "roi_version": "contours-v3",
+        "kind": "contour",
+        "geometry_ref": "syn-geometry-cine-sax"
+      }
+    ]
+  },
+  "geometry_context": {
+    "usage": "referenced",
+    "geometry_refs": [
+      {
+        "geometry_ref": "syn-geometry-cine-sax",
+        "geometry_version": "geometry-v2",
+        "coordinate_frame": {
+          "frame": "pixel_index_2d",
+          "axis_order": ["column", "row"],
+          "length_unit": "px"
+        }
+      }
+    ]
+  },
+  "provenance": {
+    "algorithm": {
+      "algorithm_id": "cine.synthetic_function",
+      "algorithm_version": "1.2.0",
+      "parameters": { "integration": "synthetic-disc" }
+    },
+    "input_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "lineage": [
+      { "kind": "series", "ref": "syn-series-cine-sax", "version": "frames-v1" },
+      { "kind": "roi", "ref": "syn-roi-lv-endo", "version": "contours-v3" },
+      { "kind": "geometry", "ref": "syn-geometry-cine-sax", "version": "geometry-v2" },
+      { "kind": "algorithm", "ref": "cine.synthetic_function", "version": "1.2.0" }
+    ]
+  },
+  "quality": {
+    "assessment_status": "completed",
+    "overall_disposition": "pass",
+    "flags": []
+  },
+  "review": {
+    "status": "not_reviewed",
+    "revision": 0
+  },
+  "extensions": {
+    "cine_function.summary": {
+      "synthetic": true
+    }
+  }
+}

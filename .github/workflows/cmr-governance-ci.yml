@@ -12,8 +12,10 @@ on:
       - 'apps/api/core/**'
       - 'apps/api/modules/**'
       - 'apps/web/src/features/**'
+      - 'apps/web/src/shared/**'
       - 'contracts/cmr/**'
       - 'docs/cmr/**'
+      - 'scripts/cmr/**'
       - 'tests/cmr/**'
   workflow_dispatch:
 
@@ -45,11 +47,15 @@ jobs:
             git diff --check HEAD^ HEAD
           fi
 
-      - name: Run CMR governance tests
+      - name: Run CMR governance and contract tests
         run: >-
           python -m unittest
           tests.cmr.test_module_layout
           tests.cmr.test_repository_safety
+          tests.cmr.test_result_contract
+
+      - name: Check generated CMR result types
+        run: python scripts/cmr/generate_result_types.py --check
 
       - name: Compile CMR Python boundaries
-        run: python -m compileall -q apps/api/core apps/api/modules tests/cmr
+        run: python -m compileall -q apps/api/core apps/api/modules scripts/cmr tests/cmr
