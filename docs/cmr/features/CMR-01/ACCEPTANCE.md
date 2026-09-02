@@ -2,28 +2,28 @@
 
 ## Automated contract checks
 
-- [ ] valid synthetic scalar result with unit, sources, multi-slice/multi-phase
+- [x] valid synthetic scalar result with unit, sources, multi-slice/multi-phase
   selectors, ROI/geometry, algorithm, quality and unreviewed state;
-- [ ] valid dimensionless result uses UCUM `1`;
-- [ ] valid non-scalar artifact reference and multi-series aggregation;
-- [ ] schema -> backend parse -> serialize -> parse round-trip;
-- [ ] generated frontend declarations exactly match the canonical schema;
-- [ ] missing unit/source/coordinate frame/algorithm version/review rejected;
-- [ ] invalid quality enum and unnamespaced extension rejected;
-- [ ] unknown major version rejected;
-- [ ] unavailable states cannot hide an unexplained null value;
-- [ ] changed contour/ROI version is detected as stale;
-- [ ] changed result fingerprint invalidates a previous review.
+- [x] valid dimensionless result uses UCUM `1`;
+- [x] valid non-scalar artifact reference and multi-series aggregation;
+- [x] schema -> backend parse -> serialize -> parse round-trip;
+- [x] generated frontend declarations exactly match the canonical schema;
+- [x] missing unit/source/coordinate frame/algorithm version/review rejected;
+- [x] invalid quality enum and unnamespaced extension rejected;
+- [x] unknown major version rejected;
+- [x] unavailable states cannot hide an unexplained null value;
+- [x] changed contour/ROI or algorithm version is detected as stale;
+- [x] changed result fingerprint invalidates a previous review.
 
 ## Repository checks
 
-- [ ] `python3 -m unittest tests.cmr.test_result_contract`
-- [ ] existing CMR governance tests
-- [ ] Python compile boundary
-- [ ] frontend typecheck/test, if dependencies are available
-- [ ] `git diff --check`
-- [ ] tracked CMR sensitive-artifact/signature scan
-- [ ] dashboard generation and `--check`, if a repository command exists
+- [x] `python3 -m unittest tests.cmr.test_result_contract` (21 passed)
+- [x] existing CMR governance tests (7 passed)
+- [x] Python compile boundary
+- [ ] frontend typecheck/test: blocked because the server shell has no `npm`
+- [x] `git diff --check`
+- [x] tracked CMR sensitive-artifact/signature scan
+- [ ] dashboard generation and `--check`: blocked because no repository command exists
 
 ## Evidence scope
 

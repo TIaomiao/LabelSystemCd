@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -187,6 +188,25 @@ class CmrResultContractTest(unittest.TestCase):
 
         with self.assertRaises(ContractValidationError):
             result_contract._assert_supported_schema(schema)
+
+    def test_cmr01_status_machine_block_is_parseable_and_truthful(self):
+        status_text = (
+            ROOT / "docs" / "cmr" / "features" / "CMR-01" / "STATUS.md"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"<!-- cmr-status\s*(\{.*?\})\s*cmr-status -->", status_text, re.S)
+        self.assertIsNotNone(match)
+        status = json.loads(match.group(1))
+        self.assertEqual(status["session_id"], "CMR-01")
+        self.assertEqual(status["state"], "technically_verified")
+        self.assertEqual(status["data_scope"], "synthetic")
+        self.assertEqual(status["physician_review"]["state"], "not_scheduled")
+        self.assertEqual(status["demo_only"], [])
+        self.assertTrue(status["implemented"])
+        self.assertTrue(status["not_done"])
+        self.assertEqual(
+            {item["result"] for item in status["tests"]},
+            {"passed", "blocked"},
+        )
 
 
 if __name__ == "__main__":

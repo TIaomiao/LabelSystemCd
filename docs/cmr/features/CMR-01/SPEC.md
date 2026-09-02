@@ -2,8 +2,8 @@
 
 ## Status
 
-`planned` until repository tests complete; highest possible state in this task
-is `technically_verified`.
+`technically_verified`. This state is based on synthetic contract tests only;
+there is no physician or production acceptance.
 
 ## Product scope
 
