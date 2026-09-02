@@ -2,7 +2,7 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1；Cockpit `feat/cmr-session-cockpit-mvp` | 当前PR头 `f52a53d`：本地6项治理检查通过，GitHub当前头CI待确认；旧头 `fad0529` 曾2/2；Cockpit基线 `ca3338b` 10项通过、未推送 | not applicable |
+| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1；Cockpit `feat/cmr-session-cockpit-mvp` | 当前PR头 `f52a53d`：本地6项治理检查通过，GitHub当前头CI待确认；旧头 `fad0529` 曾2/2；Cockpit `1b9780a` 12项和两项生成检查通过、未推送 | not applicable |
 | CMR-01 | Shared foundation | planned | not created | none | architecture review |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
@@ -28,6 +28,6 @@ Each handoff must record scope, branch, worktree, baseline tag, last commit, imp
   2026-09-02. It is passphrase-protected, so unattended push remains disabled
   until the builder unlocks it interactively. Consistent `user.name`/`user.email`
   remains an M0.1 identity-governance task.
-- Cockpit baseline `ca3338b` passed 10 tests plus both generated-artifact
+- Cockpit commit `1b9780a` passed 12 tests plus both generated-artifact
   checks and has a verified recovery bundle. Its remote branch and PR are not
   yet created.

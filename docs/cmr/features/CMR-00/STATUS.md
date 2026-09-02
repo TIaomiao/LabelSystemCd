@@ -88,7 +88,7 @@
   ],
   "cockpit_delivery": {
     "branch": "feat/cmr-session-cockpit-mvp",
-    "baseline_commit": "ca3338b",
+    "verified_commit": "1b9780a",
     "tests": {
       "passed": 12,
       "total": 12,

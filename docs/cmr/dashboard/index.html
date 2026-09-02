@@ -168,7 +168,7 @@
     ],
     "cockpit_delivery": {
       "branch": "feat/cmr-session-cockpit-mvp",
-      "baseline_commit": "ca3338b",
+      "verified_commit": "1b9780a",
       "tests": {
         "passed": 12,
         "total": 12,
@@ -519,7 +519,7 @@
       const cockpitHtml = cockpit ? "<div class=\"subsection\"><h4>Cockpit 交付</h4><div class=\"gate\"><strong>" +
         esc(cockpit.branch) + "</strong>" + badge(cockpit.tests.state, "测试 " + cockpit.tests.passed + "/" + cockpit.tests.total) +
         " " + badge(cockpit.remote_state, remoteLabels[cockpit.remote_state]) +
-        "<p>分支基线 " + esc(cockpit.baseline_commit) + "；生成检查 " + esc(cockpit.render_checks) +
+        "<p>最近验证提交 " + esc(cockpit.verified_commit) + "；生成检查 " + esc(cockpit.render_checks) +
         "；bundle " + esc(cockpit.bundle) + "</p><small>更新于 " + esc(cockpit.updated_at) + "</small></div></div>" : "";
       return "<div class=\"panel\"><h3>" + esc(item.session_id) + " · " + esc(item.feature) + "</h3><div class=\"gates\">" +
         current + "</div>" + (historical ? "<div class=\"subsection\"><h4>历史证据（不得沿用为当前门禁）</h4><div class=\"gates\">" + historical + "</div></div>" : "") +

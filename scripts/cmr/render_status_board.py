@@ -87,13 +87,13 @@ def parse_status(path: Path) -> dict[str, Any]:
     cockpit = data.get("cockpit_delivery")
     if cockpit is not None:
         required = {
-            "branch", "baseline_commit", "tests", "render_checks", "bundle",
+            "branch", "verified_commit", "tests", "render_checks", "bundle",
             "remote_state", "updated_at",
         }
         if not isinstance(cockpit, dict) or not required <= cockpit.keys():
             raise StatusError(f"{path}: invalid cockpit_delivery")
-        if not re.fullmatch(r"[0-9a-f]{7,40}", str(cockpit["baseline_commit"])):
-            raise StatusError(f"{path}: invalid cockpit baseline_commit")
+        if not re.fullmatch(r"[0-9a-f]{7,40}", str(cockpit["verified_commit"])):
+            raise StatusError(f"{path}: invalid cockpit verified_commit")
         if cockpit["remote_state"] not in ALLOWED_COCKPIT_REMOTE_STATES:
             raise StatusError(f"{path}: invalid cockpit remote_state")
         tests = cockpit["tests"]
@@ -251,7 +251,7 @@ def render_html(
       const cockpitHtml = cockpit ? "<div class=\"subsection\"><h4>Cockpit 交付</h4><div class=\"gate\"><strong>" +
         esc(cockpit.branch) + "</strong>" + badge(cockpit.tests.state, "测试 " + cockpit.tests.passed + "/" + cockpit.tests.total) +
         " " + badge(cockpit.remote_state, remoteLabels[cockpit.remote_state]) +
-        "<p>分支基线 " + esc(cockpit.baseline_commit) + "；生成检查 " + esc(cockpit.render_checks) +
+        "<p>最近验证提交 " + esc(cockpit.verified_commit) + "；生成检查 " + esc(cockpit.render_checks) +
         "；bundle " + esc(cockpit.bundle) + "</p><small>更新于 " + esc(cockpit.updated_at) + "</small></div></div>" : "";
       return "<div class=\"panel\"><h3>" + esc(item.session_id) + " · " + esc(item.feature) + "</h3><div class=\"gates\">" +
         current + "</div>" + (historical ? "<div class=\"subsection\"><h4>历史证据（不得沿用为当前门禁）</h4><div class=\"gates\">" + historical + "</div></div>" : "") +

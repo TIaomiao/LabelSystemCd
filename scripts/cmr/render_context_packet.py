@@ -89,7 +89,7 @@ def render_packet(
                     "",
                     "### Cockpit 交付",
                     "",
-                    f"- 分支：`{cockpit['branch']}`；本轮开始基线：`{cockpit['baseline_commit']}`",
+                    f"- 分支：`{cockpit['branch']}`；最近验证提交：`{cockpit['verified_commit']}`",
                     f"- 测试：`{cockpit['tests']['passed']}/{cockpit['tests']['total']}`；"
                     f"生成检查：`{cockpit['render_checks']}`；bundle：`{cockpit['bundle']}`",
                     f"- 远端状态：`{cockpit['remote_state']}`；更新时间：`{cockpit['updated_at']}`",

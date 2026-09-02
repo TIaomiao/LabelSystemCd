@@ -48,7 +48,7 @@
 
 ### Cockpit 交付
 
-- 分支：`feat/cmr-session-cockpit-mvp`；本轮开始基线：`ca3338b`
+- 分支：`feat/cmr-session-cockpit-mvp`；最近验证提交：`1b9780a`
 - 测试：`12/12`；生成检查：`passed`；bundle：`verified`
 - 远端状态：`not_pushed`；更新时间：`2026-09-02T11:33:38+08:00`
 
