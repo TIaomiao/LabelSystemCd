@@ -3,7 +3,7 @@
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
 | CMR-00 | Program control and integration | technically_verified | merged PR #1 | Merge `3c6f21f` server-verified; reviewed baseline tag `cmr-m0-governance-merged-20260904` pushed | not applicable |
-| CMR-01 | Shared foundation | technically_verified | pushed `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | rebased verification commit `748767c`: 28 Python tests, generated-type check, compile boundary, diff check and 17 Node tests passed; TypeScript compiler blocked because `tsc` is unavailable; PR pending | not scheduled |
+| CMR-01 | Shared foundation | technically_verified | PR #2 open from `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | rebased verification commit `748767c`: 28 Python tests, generated-type check, compile boundary, diff check and 17 Node tests passed; TypeScript compiler blocked because `tsc` is unavailable; ADR-002 and CI review pending | not scheduled |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
 | CMR-20 | T1 Mapping/ECV | planned | not created | none | not scheduled |
