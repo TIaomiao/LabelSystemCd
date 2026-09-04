@@ -73,7 +73,7 @@
     "issue": "#1",
     "pr": "#1",
     "head_commit": "f52a53d",
-    "updated_at": "2026-09-04T10:45:46+08:00",
+    "updated_at": "2026-09-04T11:09:22+08:00",
     "data_scope": "none",
     "depends_on": [],
     "implemented": [
@@ -83,14 +83,14 @@
       "仓库边界ADR-001",
       "TIaomiao专用SSH key已创建并完成人工认证",
       "PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f",
-      "服务器已核验合并提交并推送基线tag cmr-m0-governance-merged-20260904"
+      "服务器已核验合并提交并推送基线tag cmr-m0-governance-merged-20260904",
+      "Cockpit PR #3已建立并进入CI与工程评审"
     ],
     "demo_only": [
       "静态session看板原型和Codex对话追溯"
     ],
     "not_done": [
-      "TIaomiao Git identity统一",
-      "Cockpit独立PR"
+      "TIaomiao Git identity统一"
     ],
     "tests": [
       {
@@ -111,9 +111,9 @@
       "cases": []
     },
     "blockers": [
-      "Cockpit PR尚未建立"
+      "Cockpit PR #3的GitHub CI和工程评审待完成"
     ],
-    "next_action": "建立Cockpit独立PR，然后推进CMR-01架构评审",
+    "next_action": "以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪PR #3 CI",
     "evidence_refs": [
       "docs/cmr/decisions/ADR-001-repository-boundary.md",
       "docs/cmr/HANDOFF_CONTRACT.md",
@@ -167,6 +167,7 @@
     ],
     "cockpit_delivery": {
       "branch": "feat/cmr-session-cockpit-mvp",
+      "pr": "#3",
       "verified_commit": "5bcbd30",
       "tests": {
         "passed": 12,
@@ -175,8 +176,8 @@
       },
       "render_checks": "passed",
       "bundle": "verified",
-      "remote_state": "pushed",
-      "updated_at": "2026-09-04T10:45:46+08:00"
+      "remote_state": "pr_open",
+      "updated_at": "2026-09-04T11:09:22+08:00"
     }
   },
   {
@@ -188,9 +189,9 @@
     "branch": "feat/cmr-01-result-contract",
     "worktree_id": "cmr-01-result-contract",
     "issue": null,
-    "pr": null,
+    "pr": "#2",
     "head_commit": "748767c",
-    "updated_at": "2026-09-04T10:45:46+08:00",
+    "updated_at": "2026-09-04T11:09:22+08:00",
     "data_scope": "synthetic",
     "depends_on": [],
     "implemented": [
@@ -200,7 +201,8 @@
       "synthetic scalar dimensionless artifact and negative fixtures",
       "proposed ADR-002 and CMR-01 specification evidence",
       "rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f",
-      "branch pushed to origin"
+      "branch pushed to origin",
+      "GitHub PR #2 已建立并进入架构与工程评审"
     ],
     "demo_only": [],
     "not_done": [
@@ -247,11 +249,10 @@
       "cases": []
     },
     "blockers": [
-      "apps/web typecheck cannot find tsc because frontend dependencies are not installed",
-      "ADR-002 requires architecture review",
-      "pull request is not open"
+      "apps/web TypeScript typecheck 因前端依赖未安装而找不到 tsc",
+      "ADR-002 尚待架构评审"
     ],
-    "next_action": "Open the CMR-01 pull request for architecture and engineering review",
+    "next_action": "在 PR #2 完成 ADR-002 架构评审并检查 GitHub CI",
     "evidence_refs": [
       "contracts/cmr/result-envelope.schema.json",
       "docs/cmr/decisions/ADR-002-result-contract-v1.md",
@@ -508,7 +509,7 @@
 ];
     const taskRegistry = {
   "schema_version": "cmr.codex-task-registry.v1",
-  "observed_at": "2026-09-02T14:49:49+08:00",
+  "observed_at": "2026-09-04T11:09:22+08:00",
   "source_note": "人工筛选的 Codex 任务列表快照；仅登记 CMR 产品能力建设相关对话。",
   "tasks": [
     {
@@ -517,8 +518,8 @@
       "sessions": [
         "CMR-00"
       ],
-      "state_snapshot": "active",
-      "last_activity_at": "2026-09-02T14:49:49+08:00",
+      "state_snapshot": "idle",
+      "last_activity_at": "2026-09-04T11:09:22+08:00",
       "responsibility": "仓库治理、Cockpit、跨 session 集成与交接门禁"
     },
     {
@@ -530,6 +531,16 @@
       "state_snapshot": "idle",
       "last_activity_at": "2026-09-02T14:42:35+08:00",
       "responsibility": "CMR-01 公共结果契约、校验、共享类型与合成测试"
+    },
+    {
+      "thread_id": "01a05643-d7d7-7f32-a322-f59f143666c8",
+      "title": "CMR-01 · 服务器转移、PR与架构评审",
+      "sessions": [
+        "CMR-01"
+      ],
+      "state_snapshot": "active",
+      "last_activity_at": "2026-09-04T11:09:22+08:00",
+      "responsibility": "以CMR-01为主线完成Git交付、PR追踪、ADR-002评审与下一阶段门禁"
     }
   ]
 };
@@ -561,6 +572,7 @@
       const cockpitHtml = cockpit ? "<div class=\"subsection\"><h4>Cockpit 交付</h4><div class=\"gate\"><strong>" +
         esc(cockpit.branch) + "</strong>" + badge(cockpit.tests.state, "测试 " + cockpit.tests.passed + "/" + cockpit.tests.total) +
         " " + badge(cockpit.remote_state, remoteLabels[cockpit.remote_state]) +
+        (cockpit.pr ? " " + badge("current", "PR " + cockpit.pr) : "") +
         "<p>最近验证提交 " + esc(cockpit.verified_commit) + "；生成检查 " + esc(cockpit.render_checks) +
         "；bundle " + esc(cockpit.bundle) + "</p><small>更新于 " + esc(cockpit.updated_at) + "</small></div></div>" : "";
       return "<div class=\"panel\"><h3>" + esc(item.session_id) + " · " + esc(item.feature) + "</h3><div class=\"gates\">" +

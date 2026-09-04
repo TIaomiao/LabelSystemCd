@@ -23,6 +23,7 @@ class StatusBoardTest(unittest.TestCase):
         self.assertIn("PR #1 当前头 Checks", rendered)
         self.assertIn("历史证据（不得沿用为当前门禁）", rendered)
         self.assertIn("Cockpit 交付", rendered)
+        self.assertIn("PR #3", rendered)
         self.assertIn("CMR-00 · 总控与集成", rendered)
         self.assertIn("建立 CMR 结果公共契约", rendered)
         self.assertIn('<div class=\\"subsection\\">', rendered)
@@ -45,11 +46,14 @@ class StatusBoardTest(unittest.TestCase):
     def test_task_registry_is_curated_to_cmr_product_threads(self):
         statuses = render_status_board.collect_statuses(ROOT)
         registry = render_status_board.load_task_registry(ROOT, statuses)
-        self.assertEqual(len(registry["tasks"]), 2)
+        self.assertEqual(len(registry["tasks"]), 3)
         self.assertEqual(
             {task["sessions"][0] for task in registry["tasks"]},
             {"CMR-00", "CMR-01"},
         )
+        active_tasks = [task for task in registry["tasks"] if task["state_snapshot"] == "active"]
+        self.assertEqual(len(active_tasks), 1)
+        self.assertEqual(active_tasks[0]["sessions"], ["CMR-01"])
         serialized = json.dumps(registry, ensure_ascii=False)
         self.assertNotIn("EHR", serialized)
         self.assertNotIn("Workstation 修理", serialized)

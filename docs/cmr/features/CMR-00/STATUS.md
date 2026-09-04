@@ -12,7 +12,7 @@
   "issue": "#1",
   "pr": "#1",
   "head_commit": "f52a53d",
-  "updated_at": "2026-09-04T10:45:46+08:00",
+  "updated_at": "2026-09-04T11:09:22+08:00",
   "data_scope": "none",
   "depends_on": [],
   "implemented": [
@@ -22,18 +22,19 @@
     "仓库边界ADR-001",
     "TIaomiao专用SSH key已创建并完成人工认证",
     "PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f",
-    "服务器已核验合并提交并推送基线tag cmr-m0-governance-merged-20260904"
+    "服务器已核验合并提交并推送基线tag cmr-m0-governance-merged-20260904",
+    "Cockpit PR #3已建立并进入CI与工程评审"
   ],
   "demo_only": ["静态session看板原型和Codex对话追溯"],
-  "not_done": ["TIaomiao Git identity统一", "Cockpit独立PR"],
+  "not_done": ["TIaomiao Git identity统一"],
   "tests": [
     {"name": "CMR governance unit tests", "result": "passed"},
     {"name": "Python compileall boundary", "result": "passed"},
     {"name": "workflow YAML parse", "result": "passed"}
   ],
   "physician_review": {"state": "not_applicable", "cases": []},
-  "blockers": ["Cockpit PR尚未建立"],
-  "next_action": "建立Cockpit独立PR，然后推进CMR-01架构评审",
+  "blockers": ["Cockpit PR #3的GitHub CI和工程评审待完成"],
+  "next_action": "以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪PR #3 CI",
   "evidence_refs": [
     "docs/cmr/decisions/ADR-001-repository-boundary.md",
     "docs/cmr/HANDOFF_CONTRACT.md",
@@ -87,6 +88,7 @@
   ],
   "cockpit_delivery": {
     "branch": "feat/cmr-session-cockpit-mvp",
+    "pr": "#3",
     "verified_commit": "5bcbd30",
     "tests": {
       "passed": 12,
@@ -95,8 +97,8 @@
     },
     "render_checks": "passed",
     "bundle": "verified",
-    "remote_state": "pushed",
-    "updated_at": "2026-09-04T10:45:46+08:00"
+    "remote_state": "pr_open",
+    "updated_at": "2026-09-04T11:09:22+08:00"
   }
 }
 cmr-status -->
@@ -105,4 +107,4 @@ cmr-status -->
 
 - 完成：M0仓库治理、敏感文件门禁、云端交接契约、多session边界及Cockpit基础验证。
 - 已知反例/失败边界：看板只展示脱敏工程状态，不证明算法临床有效，也不替代PR页面或医生验收。
-- 下一步：建立Cockpit独立PR，然后推进CMR-01架构评审。
+- 下一步：以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪Cockpit PR #3 CI。

@@ -2,8 +2,8 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | technically_verified | PR #1 merged；Cockpit `feat/cmr-session-cockpit-mvp` | merge `3c6f21f`与父提交已在服务器核验；基线tag `cmr-m0-governance-merged-20260904`已推送 | not applicable |
-| CMR-01 | Shared foundation | technically_verified | pushed `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | rebased verification commit `748767c`：28项Python、生成类型、compile、diff与17项Node测试通过；TypeScript编译因缺少tsc阻塞；PR待建立 | not scheduled |
+| CMR-00 | Program control and integration | technically_verified | PR #1 merged；Cockpit PR #3 open | merge `3c6f21f`与父提交已在服务器核验；基线tag `cmr-m0-governance-merged-20260904`已推送；PR #3等待CI与工程评审 | not applicable |
+| CMR-01 | Shared foundation | technically_verified | PR #2 open from `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | rebased verification commit `748767c`：28项Python、生成类型、compile、diff与17项Node测试通过；TypeScript编译因缺少tsc阻塞；ADR-002与CI待评审 | not scheduled |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
 | CMR-20 | T1 Mapping/ECV | planned | not created | none | not scheduled |
@@ -29,6 +29,6 @@ Each handoff must record scope, branch, worktree, baseline tag, last commit, imp
   2026-09-02. It is passphrase-protected, so unattended push remains disabled
   until the builder unlocks it interactively. Consistent `user.name`/`user.email`
   remains an M0.1 identity-governance task.
-- Cockpit commit `1b9780a` passed 12 tests plus both generated-artifact
-  checks and has a verified recovery bundle. Its remote branch and PR are not
-  yet created.
+- Cockpit verification passed 12 tests plus both generated-artifact checks and
+  has a verified recovery bundle. Remote branch `feat/cmr-session-cockpit-mvp`
+  is published and PR #3 is open.

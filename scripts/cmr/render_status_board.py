@@ -96,6 +96,8 @@ def parse_status(path: Path) -> dict[str, Any]:
             raise StatusError(f"{path}: invalid cockpit verified_commit")
         if cockpit["remote_state"] not in ALLOWED_COCKPIT_REMOTE_STATES:
             raise StatusError(f"{path}: invalid cockpit remote_state")
+        if cockpit.get("pr") is not None and not re.fullmatch(r"#\d+", str(cockpit["pr"])):
+            raise StatusError(f"{path}: invalid cockpit PR")
         tests = cockpit["tests"]
         if not isinstance(tests, dict) or not {"passed", "total", "state"} <= tests.keys():
             raise StatusError(f"{path}: invalid cockpit tests")
@@ -251,6 +253,7 @@ def render_html(
       const cockpitHtml = cockpit ? "<div class=\"subsection\"><h4>Cockpit 交付</h4><div class=\"gate\"><strong>" +
         esc(cockpit.branch) + "</strong>" + badge(cockpit.tests.state, "测试 " + cockpit.tests.passed + "/" + cockpit.tests.total) +
         " " + badge(cockpit.remote_state, remoteLabels[cockpit.remote_state]) +
+        (cockpit.pr ? " " + badge("current", "PR " + cockpit.pr) : "") +
         "<p>最近验证提交 " + esc(cockpit.verified_commit) + "；生成检查 " + esc(cockpit.render_checks) +
         "；bundle " + esc(cockpit.bundle) + "</p><small>更新于 " + esc(cockpit.updated_at) + "</small></div></div>" : "";
       return "<div class=\"panel\"><h3>" + esc(item.session_id) + " · " + esc(item.feature) + "</h3><div class=\"gates\">" +

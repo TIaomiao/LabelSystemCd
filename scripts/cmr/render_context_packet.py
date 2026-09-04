@@ -92,7 +92,8 @@ def render_packet(
                     f"- 分支：`{cockpit['branch']}`；最近验证提交：`{cockpit['verified_commit']}`",
                     f"- 测试：`{cockpit['tests']['passed']}/{cockpit['tests']['total']}`；"
                     f"生成检查：`{cockpit['render_checks']}`；bundle：`{cockpit['bundle']}`",
-                    f"- 远端状态：`{cockpit['remote_state']}`；更新时间：`{cockpit['updated_at']}`",
+                    f"- 远端状态：`{cockpit['remote_state']}`；PR：`{cockpit.get('pr') or '—'}`；"
+                    f"更新时间：`{cockpit['updated_at']}`",
                 ]
             )
     registry = task_registry or {
