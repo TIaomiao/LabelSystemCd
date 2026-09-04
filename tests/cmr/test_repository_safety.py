@@ -10,6 +10,14 @@ GOVERNANCE_FILES = (
     ".github/copilot-instructions.md",
     ".github/pull_request_template.md",
 )
+CONTRACT_WATCH_PATHS = (
+    "apps/api/core/**",
+    "apps/web/src/shared/**",
+    "contracts/cmr/**",
+    "docs/cmr/**",
+    "scripts/cmr/**",
+    "tests/cmr/**",
+)
 CMR_SCOPES = (
     *GOVERNANCE_FILES,
     ".github/ISSUE_TEMPLATE",
@@ -17,8 +25,10 @@ CMR_SCOPES = (
     "apps/api/core",
     "apps/api/modules",
     "apps/web/src/features",
+    "apps/web/src/shared",
     "contracts/cmr",
     "docs/cmr",
+    "scripts/cmr",
     "tests/cmr",
 )
 DISALLOWED_NAMES = {".env", "secret_key", "id_rsa", "id_ed25519"}
@@ -60,6 +70,14 @@ class CmrRepositorySafetyTest(unittest.TestCase):
             encoding="utf-8"
         )
         for relative_path in GOVERNANCE_FILES:
+            with self.subTest(path=relative_path):
+                self.assertIn(f"- '{relative_path}'", workflow)
+
+    def test_governance_workflow_watches_shared_contract_boundaries(self):
+        workflow = (ROOT / ".github/workflows/cmr-governance-ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for relative_path in CONTRACT_WATCH_PATHS:
             with self.subTest(path=relative_path):
                 self.assertIn(f"- '{relative_path}'", workflow)
 

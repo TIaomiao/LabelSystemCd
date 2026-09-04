@@ -2,8 +2,8 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1 | `fad0529`: local 5 tests passed; GitHub CI 2/2 passed (screenshot, 2026-08-31); engineering review pending | not applicable |
-| CMR-01 | Shared foundation | planned | not created | none | architecture review |
+| CMR-00 | Program control and integration | technically_verified | merged PR #1 | Merge `3c6f21f` server-verified; reviewed baseline tag `cmr-m0-governance-merged-20260904` pushed | not applicable |
+| CMR-01 | Shared foundation | technically_verified | PR #2 open from `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | architecture-fix commit `00cd6c0`: 31 Python tests, generated-type check, compile boundary, diff check, 17 Node tests and TypeScript 5.9.3 typecheck passed; ADR-002 acceptance and CI review pending | not scheduled |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
 | CMR-20 | T1 Mapping/ECV | planned | not created | none | not scheduled |

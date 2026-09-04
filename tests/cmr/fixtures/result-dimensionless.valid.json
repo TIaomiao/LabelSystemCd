@@ -1,0 +1,59 @@
+{
+  "contract_version": "1.0.0",
+  "result_id": "syn-result-rv-lv-ratio",
+  "result_fingerprint": "sha256:e6986ab4ccae3cfc5ca183c95e15dbc979255b9fe3512014970a96b2a66aa097",
+  "metric": {
+    "metric_id": "cine.rv_lv_ratio",
+    "display_name": "Synthetic RV to LV ratio"
+  },
+  "value": {
+    "state": "computed",
+    "unit": { "system": "UCUM", "code": "1" },
+    "scalar": 0.92
+  },
+  "sources": {
+    "series": [
+      {
+        "series_ref": "syn-series-cine-lax",
+        "series_version": "frames-v2",
+        "role": "source.cine_lax"
+      }
+    ],
+    "selectors": [
+      {
+        "series_ref": "syn-series-cine-lax",
+        "slices": { "mode": "all" },
+        "phases": { "mode": "range", "start": 0, "end": 19 }
+      }
+    ]
+  },
+  "roi_context": {
+    "usage": "not_applicable",
+    "reason_code": "roi.metric_not_roi_based"
+  },
+  "geometry_context": {
+    "usage": "not_applicable",
+    "reason_code": "geometry.no_saved_geometry"
+  },
+  "provenance": {
+    "algorithm": {
+      "algorithm_id": "cine.synthetic_ratio",
+      "algorithm_version": "1.0.0",
+      "parameters": {}
+    },
+    "input_fingerprint": "sha256:3ea8204f04d4745c2aa24b5e4873dbbdf7feb1a777db9ad5d2580993a93519ff",
+    "lineage": [
+      { "kind": "series", "ref": "syn-series-cine-lax", "version": "frames-v2" },
+      { "kind": "algorithm", "ref": "cine.synthetic_ratio", "version": "1.0.0" }
+    ]
+  },
+  "quality": {
+    "assessment_status": "not_run",
+    "overall_disposition": "not_assessed",
+    "flags": []
+  },
+  "review": {
+    "status": "pending",
+    "revision": 0
+  }
+}

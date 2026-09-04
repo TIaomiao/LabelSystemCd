@@ -1,0 +1,85 @@
+{
+  "contract_version": "1.0.0",
+  "result_id": "syn-result-volume-curve",
+  "result_fingerprint": "sha256:aabd522d31eacc959d124a090ac4dcbbca1a400ba160d2d0f43c37037445e9eb",
+  "metric": {
+    "metric_id": "cine.lv_volume_curve",
+    "display_name": "Synthetic LV volume curve"
+  },
+  "value": {
+    "state": "computed",
+    "unit": { "system": "UCUM", "code": "mL" },
+    "artifact": {
+      "artifact_type": "curve",
+      "artifact_ref": "syn-artifact-lv-volume-curve",
+      "artifact_version": "curve-v1",
+      "media_type": "application/json",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "sources": {
+    "series": [
+      {
+        "series_ref": "syn-series-cine-sax-a",
+        "series_version": "frames-v1",
+        "role": "source.cine_sax"
+      },
+      {
+        "series_ref": "syn-series-cine-sax-b",
+        "series_version": "frames-v1",
+        "role": "source.cine_sax"
+      }
+    ],
+    "selectors": [
+      {
+        "series_ref": "syn-series-cine-sax-a",
+        "slices": { "mode": "range", "start": 0, "end": 5 },
+        "phases": { "mode": "all" }
+      },
+      {
+        "series_ref": "syn-series-cine-sax-b",
+        "slices": { "mode": "range", "start": 6, "end": 11 },
+        "phases": { "mode": "all" }
+      }
+    ]
+  },
+  "roi_context": {
+    "usage": "not_applicable",
+    "reason_code": "roi.artifact_managed_upstream"
+  },
+  "geometry_context": {
+    "usage": "not_applicable",
+    "reason_code": "geometry.artifact_managed_upstream"
+  },
+  "provenance": {
+    "algorithm": {
+      "algorithm_id": "cine.synthetic_curve",
+      "algorithm_version": "2.0.0",
+      "parameters_manifest_ref": "syn-parameters-volume-curve",
+      "parameters_manifest_version": "manifest-v4"
+    },
+    "input_fingerprint": "sha256:69fd42a54712d118f73b9f23a13503609c0fd30140ea701a4cf82b62ea385eb9",
+    "lineage": [
+      { "kind": "series", "ref": "syn-series-cine-sax-a", "version": "frames-v1" },
+      { "kind": "series", "ref": "syn-series-cine-sax-b", "version": "frames-v1" },
+      { "kind": "algorithm", "ref": "cine.synthetic_curve", "version": "2.0.0" },
+      { "kind": "parameters_manifest", "ref": "syn-parameters-volume-curve", "version": "manifest-v4" }
+    ]
+  },
+  "quality": {
+    "assessment_status": "completed",
+    "overall_disposition": "warn",
+    "flags": [
+      {
+        "code": "cine.partial_coverage",
+        "severity": "warning",
+        "scope": "selector",
+        "blocks": []
+      }
+    ]
+  },
+  "review": {
+    "status": "not_reviewed",
+    "revision": 0
+  }
+}

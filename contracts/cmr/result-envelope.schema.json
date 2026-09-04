@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://labelsystem.local/contracts/cmr/result-envelope.schema.json",
+  "title": "CMR result envelope",
+  "description": "Canonical cross-module CMR result contract. Version 1 keeps payloads small by referencing non-scalar artifacts and immutable geometry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "result_id",
+    "result_fingerprint",
+    "metric",
+    "value",
+    "sources",
+    "roi_context",
+    "geometry_context",
+    "provenance",
+    "quality",
+    "review"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "result_id": { "$ref": "#/$defs/OpaqueId" },
+    "result_fingerprint": { "$ref": "#/$defs/Sha256Digest" },
+    "metric": { "$ref": "#/$defs/MetricIdentity" },
+    "value": { "$ref": "#/$defs/ResultValue" },
+    "sources": { "$ref": "#/$defs/SourceContext" },
+    "roi_context": { "$ref": "#/$defs/RoiContext" },
+    "geometry_context": { "$ref": "#/$defs/GeometryContext" },
+    "provenance": { "$ref": "#/$defs/Provenance" },
+    "quality": { "$ref": "#/$defs/Quality" },
+    "review": { "$ref": "#/$defs/HumanReview" },
+    "extensions": { "$ref": "#/$defs/Extensions" }
+  },
+  "$defs": {
+    "OpaqueId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._:-]{2,127}$"
+    },
+    "Version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "NamespacedCode": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+    },
+    "MetricIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric_id", "display_name"],
+      "properties": {
+        "metric_id": { "$ref": "#/$defs/NamespacedCode" },
+        "display_name": { "type": "string", "minLength": 1 },
+        "component": { "type": "string", "minLength": 1 }
+      }
+    },
+    "UcumUnit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "code"],
+      "properties": {
+        "system": { "const": "UCUM" },
+        "code": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ArtifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_type", "artifact_ref", "artifact_version", "media_type"],
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "enum": ["curve", "parameter_map", "vector_field", "table", "other"]
+        },
+        "artifact_ref": { "$ref": "#/$defs/OpaqueId" },
+        "artifact_version": { "$ref": "#/$defs/Version" },
+        "media_type": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/Sha256Digest" }
+      }
+    },
+    "ComputedScalarValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "unit", "scalar"],
+      "properties": {
+        "state": { "const": "computed" },
+        "unit": { "$ref": "#/$defs/UcumUnit" },
+        "scalar": { "type": "number" }
+      }
+    },
+    "ComputedArtifactValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "unit", "artifact"],
+      "properties": {
+        "state": { "const": "computed" },
+        "unit": { "$ref": "#/$defs/UcumUnit" },
+        "artifact": { "$ref": "#/$defs/ArtifactReference" }
+      }
+    },
+    "UnavailableValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "unit", "reason_code"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["missing", "not_computed", "failed", "not_applicable"]
+        },
+        "unit": { "$ref": "#/$defs/UcumUnit" },
+        "reason_code": { "$ref": "#/$defs/NamespacedCode" }
+      }
+    },
+    "ResultValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/ComputedScalarValue" },
+        { "$ref": "#/$defs/ComputedArtifactValue" },
+        { "$ref": "#/$defs/UnavailableValue" }
+      ]
+    },
+    "SeriesSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["series_ref", "series_version", "role"],
+      "properties": {
+        "series_ref": { "$ref": "#/$defs/OpaqueId" },
+        "series_version": { "$ref": "#/$defs/Version" },
+        "role": { "$ref": "#/$defs/NamespacedCode" }
+      }
+    },
+    "AllSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": { "mode": { "const": "all" } }
+    },
+    "IndicesSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "indices"],
+      "properties": {
+        "mode": { "const": "indices" },
+        "indices": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "RangeSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "start", "end"],
+      "properties": {
+        "mode": { "const": "range" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "DimensionSelector": {
+      "oneOf": [
+        { "$ref": "#/$defs/AllSelector" },
+        { "$ref": "#/$defs/IndicesSelector" },
+        { "$ref": "#/$defs/RangeSelector" }
+      ]
+    },
+    "SeriesSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["series_ref", "slices", "phases"],
+      "properties": {
+        "series_ref": { "$ref": "#/$defs/OpaqueId" },
+        "slices": { "$ref": "#/$defs/DimensionSelector" },
+        "phases": { "$ref": "#/$defs/DimensionSelector" }
+      }
+    },
+    "SourceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["series", "selectors"],
+      "properties": {
+        "series": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/SeriesSource" }
+        },
+        "selectors": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/SeriesSelector" }
+        }
+      }
+    },
+    "RoiReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roi_ref", "roi_version", "kind", "geometry_ref"],
+      "properties": {
+        "roi_ref": { "$ref": "#/$defs/OpaqueId" },
+        "roi_version": { "$ref": "#/$defs/Version" },
+        "kind": {
+          "type": "string",
+          "enum": ["contour", "roi", "mask", "landmarks"]
+        },
+        "geometry_ref": { "$ref": "#/$defs/OpaqueId" }
+      }
+    },
+    "ReferencedRoiContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage", "roi_refs"],
+      "properties": {
+        "usage": { "const": "referenced" },
+        "roi_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/RoiReference" }
+        }
+      }
+    },
+    "NoRoiContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage", "reason_code"],
+      "properties": {
+        "usage": { "const": "not_applicable" },
+        "reason_code": { "$ref": "#/$defs/NamespacedCode" }
+      }
+    },
+    "RoiContext": {
+      "oneOf": [
+        { "$ref": "#/$defs/ReferencedRoiContext" },
+        { "$ref": "#/$defs/NoRoiContext" }
+      ]
+    },
+    "CoordinateFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "axis_order", "length_unit"],
+      "properties": {
+        "frame": {
+          "type": "string",
+          "enum": ["pixel_index_2d", "image_physical_2d", "patient_lps_3d"]
+        },
+        "axis_order": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "length_unit": {
+          "type": "string",
+          "enum": ["px", "mm"]
+        }
+      }
+    },
+    "GeometryReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["geometry_ref", "geometry_version", "coordinate_frame"],
+      "properties": {
+        "geometry_ref": { "$ref": "#/$defs/OpaqueId" },
+        "geometry_version": { "$ref": "#/$defs/Version" },
+        "coordinate_frame": { "$ref": "#/$defs/CoordinateFrame" }
+      }
+    },
+    "ReferencedGeometryContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage", "geometry_refs"],
+      "properties": {
+        "usage": { "const": "referenced" },
+        "geometry_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/GeometryReference" }
+        }
+      }
+    },
+    "NoGeometryContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage", "reason_code"],
+      "properties": {
+        "usage": { "const": "not_applicable" },
+        "reason_code": { "$ref": "#/$defs/NamespacedCode" }
+      }
+    },
+    "GeometryContext": {
+      "oneOf": [
+        { "$ref": "#/$defs/ReferencedGeometryContext" },
+        { "$ref": "#/$defs/NoGeometryContext" }
+      ]
+    },
+    "InlineAlgorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm_id", "algorithm_version", "parameters"],
+      "properties": {
+        "algorithm_id": { "$ref": "#/$defs/NamespacedCode" },
+        "algorithm_version": { "$ref": "#/$defs/Version" },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ManifestAlgorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm_id",
+        "algorithm_version",
+        "parameters_manifest_ref",
+        "parameters_manifest_version"
+      ],
+      "properties": {
+        "algorithm_id": { "$ref": "#/$defs/NamespacedCode" },
+        "algorithm_version": { "$ref": "#/$defs/Version" },
+        "parameters_manifest_ref": { "$ref": "#/$defs/OpaqueId" },
+        "parameters_manifest_version": { "$ref": "#/$defs/Version" }
+      }
+    },
+    "Algorithm": {
+      "oneOf": [
+        { "$ref": "#/$defs/InlineAlgorithm" },
+        { "$ref": "#/$defs/ManifestAlgorithm" }
+      ]
+    },
+    "LineageInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "version"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["series", "roi", "geometry", "algorithm", "parameters_manifest"]
+        },
+        "ref": { "$ref": "#/$defs/OpaqueId" },
+        "version": { "$ref": "#/$defs/Version" }
+      }
+    },
+    "Provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "input_fingerprint", "lineage"],
+      "properties": {
+        "algorithm": { "$ref": "#/$defs/Algorithm" },
+        "input_fingerprint": { "$ref": "#/$defs/Sha256Digest" },
+        "lineage": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/LineageInput" }
+        }
+      }
+    },
+    "QualityFlag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "scope", "blocks"],
+      "properties": {
+        "code": { "$ref": "#/$defs/NamespacedCode" },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error"]
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["result", "source", "selector", "roi", "geometry", "algorithm"]
+        },
+        "blocks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["display", "export", "report"]
+          }
+        }
+      }
+    },
+    "QualityNotAssessed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assessment_status", "overall_disposition", "flags"],
+      "properties": {
+        "assessment_status": { "const": "not_run" },
+        "overall_disposition": { "const": "not_assessed" },
+        "flags": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "QualityAssessed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assessment_status", "overall_disposition", "flags"],
+      "properties": {
+        "assessment_status": { "const": "completed" },
+        "overall_disposition": {
+          "type": "string",
+          "enum": ["pass", "warn", "fail"]
+        },
+        "flags": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/QualityFlag" }
+        }
+      }
+    },
+    "Quality": {
+      "oneOf": [
+        { "$ref": "#/$defs/QualityNotAssessed" },
+        { "$ref": "#/$defs/QualityAssessed" }
+      ]
+    },
+    "PendingReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "revision"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_reviewed", "pending"]
+        },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "DecidedReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "revision", "reviewed_result_fingerprint", "review_event_ref"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["reviewed", "rejected", "changes_requested"]
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "reviewed_result_fingerprint": { "$ref": "#/$defs/Sha256Digest" },
+        "review_event_ref": { "$ref": "#/$defs/OpaqueId" }
+      }
+    },
+    "HumanReview": {
+      "oneOf": [
+        { "$ref": "#/$defs/PendingReview" },
+        { "$ref": "#/$defs/DecidedReview" }
+      ]
+    },
+    "Extensions": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/NamespacedCode" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  }
+}
