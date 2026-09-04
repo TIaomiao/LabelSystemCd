@@ -73,7 +73,7 @@
     "issue": "#1",
     "pr": "#1",
     "head_commit": "f52a53d",
-    "updated_at": "2026-09-04T10:42:30+08:00",
+    "updated_at": "2026-09-04T10:45:46+08:00",
     "data_scope": "none",
     "depends_on": [],
     "implemented": [
@@ -90,7 +90,7 @@
     ],
     "not_done": [
       "TIaomiao Git identity统一",
-      "Cockpit分支推送和独立PR"
+      "Cockpit独立PR"
     ],
     "tests": [
       {
@@ -111,9 +111,9 @@
       "cases": []
     },
     "blockers": [
-      "Cockpit分支尚未推送且PR未建立"
+      "Cockpit PR尚未建立"
     ],
-    "next_action": "推送Cockpit分支并建立独立PR，然后推进CMR-01架构评审",
+    "next_action": "建立Cockpit独立PR，然后推进CMR-01架构评审",
     "evidence_refs": [
       "docs/cmr/decisions/ADR-001-repository-boundary.md",
       "docs/cmr/HANDOFF_CONTRACT.md",
@@ -167,7 +167,7 @@
     ],
     "cockpit_delivery": {
       "branch": "feat/cmr-session-cockpit-mvp",
-      "verified_commit": "5cce2e5",
+      "verified_commit": "5bcbd30",
       "tests": {
         "passed": 12,
         "total": 12,
@@ -175,8 +175,8 @@
       },
       "render_checks": "passed",
       "bundle": "verified",
-      "remote_state": "not_pushed",
-      "updated_at": "2026-09-04T10:42:30+08:00"
+      "remote_state": "pushed",
+      "updated_at": "2026-09-04T10:45:46+08:00"
     }
   },
   {
@@ -190,7 +190,7 @@
     "issue": null,
     "pr": null,
     "head_commit": "748767c",
-    "updated_at": "2026-09-04T10:42:30+08:00",
+    "updated_at": "2026-09-04T10:45:46+08:00",
     "data_scope": "synthetic",
     "depends_on": [],
     "implemented": [
@@ -199,7 +199,8 @@
       "generated frontend TypeScript contract boundary with drift check",
       "synthetic scalar dimensionless artifact and negative fixtures",
       "proposed ADR-002 and CMR-01 specification evidence",
-      "rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f"
+      "rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f",
+      "branch pushed to origin"
     ],
     "demo_only": [],
     "not_done": [
@@ -248,9 +249,9 @@
     "blockers": [
       "apps/web typecheck cannot find tsc because frontend dependencies are not installed",
       "ADR-002 requires architecture review",
-      "branch has no upstream and PR is not open"
+      "pull request is not open"
     ],
-    "next_action": "Push feat/cmr-01-result-contract and open its pull request for architecture and engineering review",
+    "next_action": "Open the CMR-01 pull request for architecture and engineering review",
     "evidence_refs": [
       "contracts/cmr/result-envelope.schema.json",
       "docs/cmr/decisions/ADR-002-result-contract-v1.md",
