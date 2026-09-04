@@ -2,8 +2,8 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1 | `fad0529`: local 5 tests passed; GitHub CI 2/2 passed (screenshot, 2026-08-31); engineering review pending | not applicable |
-| CMR-01 | Shared foundation | planned | not created | none | architecture review |
+| CMR-00 | Program control and integration | technically_verified | PR #1 merged；Cockpit PR #3 open | merge `3c6f21f`与父提交已在服务器核验；基线tag `cmr-m0-governance-merged-20260904`已推送；PR #3等待CI与工程评审 | not applicable |
+| CMR-01 | Shared foundation | technically_verified | PR #2 open from `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | 架构修复提交`00cd6c0`：31项Python、生成类型、compile、diff、17项Node与TypeScript 5.9.3检查通过；ADR-002授权接受与CI待核验 | not scheduled |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
 | CMR-20 | T1 Mapping/ECV | planned | not created | none | not scheduled |
@@ -18,8 +18,17 @@ Each handoff must record scope, branch, worktree, baseline tag, last commit, imp
 - The 2026-08-31 PR screenshot records `All checks have passed` with two
   successful checks at `fad0529`. The repository contains one job in each of
   the CMR Governance and Workstation workflows; both are required for this PR.
+- The builder reported on 2026-09-04 that the current `f52a53d` checks passed
+  2/2 and senior engineering confirmation completed. PR #1 merged as
+  `3c6f21f`; the server verified the merge object and pushed baseline tag
+  `cmr-m0-governance-merged-20260904`.
 - The push credential used for this PR was verified directly on the transfer
   account with `ssh -T git@github.com`, which authenticated as `LarryUESTC`.
   Commit author/committer identity is separately configured as `Codex-Backup`.
-- A personal GitHub SSH key and consistent `user.name`/`user.email` for
-  `TIaomiao` remain an M0.1 identity-governance task and do not block M0 review.
+- The `TIaomiao` server SSH key was created and manually authenticated on
+  2026-09-02. It is passphrase-protected, so unattended push remains disabled
+  until the builder unlocks it interactively. Consistent `user.name`/`user.email`
+  remains an M0.1 identity-governance task.
+- Cockpit verification passed 12 tests plus both generated-artifact checks and
+  has a verified recovery bundle. Remote branch `feat/cmr-session-cockpit-mvp`
+  is published and PR #3 is open.

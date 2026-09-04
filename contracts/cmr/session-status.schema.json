@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/cmr/session-status.schema.json",
+  "title": "CMR session status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "session_id",
+    "feature",
+    "state",
+    "owner_role",
+    "branch",
+    "head_commit",
+    "updated_at",
+    "data_scope",
+    "implemented",
+    "demo_only",
+    "not_done",
+    "tests",
+    "physician_review",
+    "blockers",
+    "next_action",
+    "evidence_refs"
+  ],
+  "properties": {
+    "schema_version": {"const": "cmr.session-status.v1"},
+    "session_id": {"type": "string", "pattern": "^CMR-[0-9]{2}$"},
+    "feature": {"type": "string", "minLength": 1},
+    "state": {
+      "type": "string",
+      "enum": ["planned", "demo_only", "technically_verified", "doctor_reviewed", "accepted"]
+    },
+    "owner_role": {"type": "string", "enum": ["builder", "senior_engineer", "codex", "cloud_planner", "doctor"]},
+    "branch": {"type": "string", "minLength": 1},
+    "worktree_id": {"type": ["string", "null"]},
+    "issue": {"type": ["string", "null"]},
+    "pr": {"type": ["string", "null"]},
+    "head_commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "data_scope": {"type": "string", "enum": ["none", "synthetic", "approved_deidentified"]},
+    "depends_on": {"type": "array", "items": {"type": "string", "pattern": "^CMR-[0-9]{2}$"}},
+    "implemented": {"type": "array", "items": {"type": "string"}},
+    "demo_only": {"type": "array", "items": {"type": "string"}},
+    "not_done": {"type": "array", "items": {"type": "string"}},
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "result"],
+        "properties": {
+          "name": {"type": "string"},
+          "result": {"type": "string", "enum": ["passed", "failed", "not_run", "blocked"]}
+        }
+      }
+    },
+    "physician_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "cases"],
+      "properties": {
+        "state": {"type": "string", "enum": ["not_applicable", "not_scheduled", "pending", "in_progress", "completed"]},
+        "cases": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "blockers": {"type": "array", "items": {"type": "string"}},
+    "next_action": {"type": "string", "minLength": 1},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}}
+  }
+}
