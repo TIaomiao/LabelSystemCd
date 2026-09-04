@@ -10,6 +10,11 @@ envelopes. Backend validation reads this file at runtime. Frontend declarations
 in `apps/web/src/shared/cmr-result.generated.ts` are generated from it and are
 checked byte-for-byte by the CMR contract tests.
 
+Version 1 result and input fingerprints are created and verified by the Python
+backend contract boundary. Frontend consumers treat them as opaque; native
+`JSON.stringify` is not the v1 fingerprint profile. Repository golden vectors
+lock the backend byte profile for non-Python integrations.
+
 Contract versioning follows semantic versioning:
 
 - major: incompatible meaning or shape; unknown majors fail closed;

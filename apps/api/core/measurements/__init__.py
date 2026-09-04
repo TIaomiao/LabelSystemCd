@@ -3,6 +3,7 @@
 from .result_contract import (
     ContractValidationError,
     StaleResultError,
+    compute_input_fingerprint,
     compute_result_fingerprint,
     load_contract_schema,
     parse_result,
@@ -13,6 +14,7 @@ from .result_contract import (
 __all__ = [
     "ContractValidationError",
     "StaleResultError",
+    "compute_input_fingerprint",
     "compute_result_fingerprint",
     "load_contract_schema",
     "parse_result",

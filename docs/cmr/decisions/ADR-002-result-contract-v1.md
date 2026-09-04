@@ -83,9 +83,12 @@ versioned artifact schema.
 
 Results record algorithm identity, algorithm version and either inline
 parameters or a versioned parameter-manifest reference. Lineage records the
-algorithm plus every source series, ROI and geometry identity/version used. A shared comparison
-entry point marks a result stale when a current input is missing or has a
-different version.
+algorithm plus every source series, ROI and geometry identity/version used;
+undeclared extra lineage is invalid. `input_fingerprint` is computed over the
+declared sources and selectors, ROI context, geometry context, algorithm and
+lineage, and is verified when the envelope is parsed. A shared comparison entry
+point marks a result stale when a current input is missing or has a different
+version.
 
 ### Quality and human review
 
@@ -98,8 +101,21 @@ Human review is a separate result-level state:
 Quality never upgrades review. A decided review binds to the result fingerprint;
 an edit that changes the fingerprint invalidates the old review until the
 workflow resets or repeats review.
-The canonical fingerprint is SHA-256 over deterministic JSON after removing
-`result_fingerprint` and `review`. Quality remains in the digest.
+The canonical result fingerprint is SHA-256 over the backend-authoritative v1
+JSON profile after removing `result_fingerprint` and `review`. The profile uses
+UTF-8, lexicographically sorted object keys, no insignificant whitespace,
+literal non-ASCII characters, finite JSON numbers and the CPython JSON number
+representation implemented by `compute_result_fingerprint`. Quality remains in
+the digest.
+
+Frontend consumers treat both fingerprints as opaque values and must not
+recompute them with native `JSON.stringify`; for example, Python serializes the
+finite value `1.0` as `1.0` while JavaScript serializes it as `1`. Result
+creation and fingerprint verification therefore remain owned by the backend
+contract boundary in v1. A non-Python producer must either call that boundary
+or pass the repository golden vectors byte-for-byte. Replacing this profile
+with a language-neutral standard such as RFC 8785 changes existing fingerprints
+and requires a new contract major version.
 
 Reviewer identity and timestamp are platform audit data. The common envelope
 contains only an opaque `review_event_ref`; the platform stores reviewer and
@@ -124,6 +140,8 @@ time under its own access-control and retention policy.
 - Opaque version references detect change only if the owning repository creates
   a new immutable version after edits.
 - An artifact digest proves bytes, not that the curve/map is clinically valid.
+- Fingerprint generation is backend-authoritative in v1; native frontend JSON
+  serialization is not a compatible implementation.
 - The first contract does not define an inline contour representation, DICOM
   frame of reference, or a persistence transaction.
 - Passing synthetic tests does not prove compatibility with legacy saved

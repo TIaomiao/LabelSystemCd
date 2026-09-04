@@ -101,6 +101,40 @@ def _assert_supported_schema(schema: Mapping[str, Any], path: str = "$") -> None
             _assert_supported_schema(child, f"{path}.{child_key}")
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    """Encode the backend-authoritative v1 fingerprint profile.
+
+    This profile deliberately follows the Python contract boundary. Frontend
+    consumers treat fingerprints as opaque and must not recompute them with
+    native ``JSON.stringify``; a language-neutral replacement would change
+    existing digests and therefore requires a new contract major version.
+    """
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def compute_input_fingerprint(payload: Mapping[str, Any]) -> str:
+    """Hash every declared technical input to a result revision."""
+
+    provenance = payload["provenance"]
+    fingerprint_payload = {
+        "algorithm": provenance["algorithm"],
+        "geometry_context": payload["geometry_context"],
+        "lineage": provenance["lineage"],
+        "roi_context": payload["roi_context"],
+        "sources": payload["sources"],
+    }
+    return "sha256:" + hashlib.sha256(
+        _canonical_json_bytes(fingerprint_payload)
+    ).hexdigest()
+
+
 def compute_result_fingerprint(payload: Mapping[str, Any]) -> str:
     """Hash the result revision, excluding the digest and review decision.
 
@@ -113,13 +147,7 @@ def compute_result_fingerprint(payload: Mapping[str, Any]) -> str:
         for key, value in payload.items()
         if key not in {"result_fingerprint", "review"}
     }
-    canonical = json.dumps(
-        fingerprint_payload,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    canonical = _canonical_json_bytes(fingerprint_payload)
     return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 
@@ -381,6 +409,20 @@ def _validate_semantics(payload: Mapping[str, Any]) -> None:
                 "$.provenance.lineage",
                 f"missing or mismatched lineage for {key[0]} {key[1]!r}",
             )
+    unexpected_lineage = sorted(set(lineage) - set(expected))
+    if unexpected_lineage:
+        kind, ref = unexpected_lineage[0]
+        _error(
+            "$.provenance.lineage",
+            f"unexpected lineage for undeclared {kind} {ref!r}",
+        )
+
+    expected_input_fingerprint = compute_input_fingerprint(payload)
+    if payload["provenance"]["input_fingerprint"] != expected_input_fingerprint:
+        _error(
+            "$.provenance.input_fingerprint",
+            "does not match the canonical declared inputs",
+        )
 
     quality = payload["quality"]
     if quality["assessment_status"] == "completed":

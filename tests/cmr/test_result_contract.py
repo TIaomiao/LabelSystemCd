@@ -9,6 +9,7 @@ from pathlib import Path
 from apps.api.core.measurements import (
     ContractValidationError,
     StaleResultError,
+    compute_input_fingerprint,
     compute_result_fingerprint,
     parse_result,
     serialize_result,
@@ -113,6 +114,31 @@ class CmrResultContractTest(unittest.TestCase):
         self.scalar.setdefault("extensions", {})["cine_function.future"] = {"opaque": 1}
         self.scalar["result_fingerprint"] = compute_result_fingerprint(self.scalar)
         parse_result(self.scalar)
+
+    def test_backend_fingerprint_profile_has_a_stable_float_golden_vector(self):
+        self.assertEqual(
+            compute_result_fingerprint({"metric": {"value": 1.0}}),
+            "sha256:d0a1cb567239c969b9e3ab08d2502cc42bd500da533f09536dbfde73a48dd810",
+        )
+
+    def test_input_fingerprint_must_match_declared_inputs(self):
+        self.assertEqual(
+            self.scalar["provenance"]["input_fingerprint"],
+            compute_input_fingerprint(self.scalar),
+        )
+        self.scalar["provenance"]["input_fingerprint"] = "sha256:" + "0" * 64
+        self.scalar["result_fingerprint"] = compute_result_fingerprint(self.scalar)
+        self.assert_invalid(self.scalar, "canonical declared inputs")
+
+    def test_lineage_cannot_include_an_undeclared_input(self):
+        self.scalar["provenance"]["lineage"].append(
+            {"kind": "series", "ref": "syn-hidden-series", "version": "v1"}
+        )
+        self.scalar["provenance"]["input_fingerprint"] = compute_input_fingerprint(
+            self.scalar
+        )
+        self.scalar["result_fingerprint"] = compute_result_fingerprint(self.scalar)
+        self.assert_invalid(self.scalar, "unexpected lineage")
 
     def test_unavailable_state_cannot_hide_null_value(self):
         self.scalar["value"] = {

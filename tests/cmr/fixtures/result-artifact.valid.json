@@ -1,7 +1,7 @@
 {
   "contract_version": "1.0.0",
   "result_id": "syn-result-volume-curve",
-  "result_fingerprint": "sha256:fb30d4006882555987e056f351329671c7611f585cfa1b31c3a40244598d3450",
+  "result_fingerprint": "sha256:aabd522d31eacc959d124a090ac4dcbbca1a400ba160d2d0f43c37037445e9eb",
   "metric": {
     "metric_id": "cine.lv_volume_curve",
     "display_name": "Synthetic LV volume curve"
@@ -58,7 +58,7 @@
       "parameters_manifest_ref": "syn-parameters-volume-curve",
       "parameters_manifest_version": "manifest-v4"
     },
-    "input_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "input_fingerprint": "sha256:69fd42a54712d118f73b9f23a13503609c0fd30140ea701a4cf82b62ea385eb9",
     "lineage": [
       { "kind": "series", "ref": "syn-series-cine-sax-a", "version": "frames-v1" },
       { "kind": "series", "ref": "syn-series-cine-sax-b", "version": "frames-v1" },

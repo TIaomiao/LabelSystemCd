@@ -1,7 +1,7 @@
 {
   "contract_version": "1.0.0",
   "result_id": "syn-result-lv-ef",
-  "result_fingerprint": "sha256:742bb931e5e2b7d0dfcf8e4a23c6a3728485f54991abe1db03d58eddacfaf7ea",
+  "result_fingerprint": "sha256:f33f22e6bc12ad9d7273a1c0caf7fe21388fd8a2750d818f26b03fc4e9bcf911",
   "metric": {
     "metric_id": "cine.lv_ef",
     "display_name": "Synthetic LV ejection fraction"
@@ -58,7 +58,7 @@
       "algorithm_version": "1.2.0",
       "parameters": { "integration": "synthetic-disc" }
     },
-    "input_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "input_fingerprint": "sha256:eaf1846e5e8f97adf9ed27c5d7bc193a2d0241c4ff8512b5597def3012f89297",
     "lineage": [
       { "kind": "series", "ref": "syn-series-cine-sax", "version": "frames-v1" },
       { "kind": "roi", "ref": "syn-roi-lv-endo", "version": "contours-v3" },

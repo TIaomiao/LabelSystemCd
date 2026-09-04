@@ -27,7 +27,9 @@ Editing a value, source, ROI, geometry, algorithm input or quality-bearing
 result content changes `result_fingerprint`. A decided review whose stored
 fingerprint differs is invalid and must not be displayed as current review.
 The fingerprint is computed from deterministic JSON after removing only the
-fingerprint field itself and the review object.
+fingerprint field itself and the review object. In v1 this calculation is
+backend-authoritative; frontend code displays and transports the digest but
+does not recompute it with native JSON serialization.
 
 ## Quality semantics
 

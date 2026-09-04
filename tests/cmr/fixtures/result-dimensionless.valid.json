@@ -1,7 +1,7 @@
 {
   "contract_version": "1.0.0",
   "result_id": "syn-result-rv-lv-ratio",
-  "result_fingerprint": "sha256:6834c884c9b40836e9eee3cd930a2fbad86e27a52a140b0946d039ffb92f2bba",
+  "result_fingerprint": "sha256:e6986ab4ccae3cfc5ca183c95e15dbc979255b9fe3512014970a96b2a66aa097",
   "metric": {
     "metric_id": "cine.rv_lv_ratio",
     "display_name": "Synthetic RV to LV ratio"
@@ -41,7 +41,7 @@
       "algorithm_version": "1.0.0",
       "parameters": {}
     },
-    "input_fingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "input_fingerprint": "sha256:3ea8204f04d4745c2aa24b5e4873dbbdf7feb1a777db9ad5d2580993a93519ff",
     "lineage": [
       { "kind": "series", "ref": "syn-series-cine-lax", "version": "frames-v2" },
       { "kind": "algorithm", "ref": "cine.synthetic_ratio", "version": "1.0.0" }

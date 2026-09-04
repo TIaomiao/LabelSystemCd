@@ -14,15 +14,20 @@
 - [x] unavailable states cannot hide an unexplained null value;
 - [x] changed contour/ROI or algorithm version is detected as stale;
 - [x] changed result fingerprint invalidates a previous review.
+- [x] declared inputs produce a verified `input_fingerprint`, and undeclared
+  lineage entries are rejected;
+- [x] a backend fingerprint golden vector locks finite-float serialization and
+  documents that frontend `JSON.stringify` is not compatible with v1.
 
 ## Repository checks
 
-- [x] `python3 -m unittest tests.cmr.test_result_contract` (21 passed)
+- [x] `python3 -m unittest tests.cmr.test_result_contract` (24 passed)
 - [x] existing CMR governance tests (7 passed)
 - [x] Python compile boundary
 - [x] `npm --prefix apps/web run test` (17 passed)
-- [ ] frontend typecheck: blocked because `tsc` is not installed in the
-  worktree; Node and npm are available
+- [x] frontend typecheck with TypeScript 5.9.3 (`--noEmit`); the compiler was
+  extracted to a temporary directory because worktree dependencies are not
+  installed
 - [x] `git diff --check`
 - [x] tracked CMR sensitive-artifact/signature scan
 - [ ] Cockpit status synchronization and generated-dashboard checks are owned

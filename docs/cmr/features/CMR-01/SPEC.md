@@ -38,7 +38,9 @@ The envelope requires:
 - Selectors may reference only declared source series.
 - ROI references may point only to declared geometry references.
 - Provenance lineage must contain the recorded algorithm, series, ROI, geometry
-  and parameter-manifest versions.
+  and parameter-manifest versions, and must not contain undeclared extras.
+- The backend must verify that `input_fingerprint` matches the declared sources,
+  selectors, ROI, geometry, algorithm and lineage.
 - Current input versions can be compared without reading the input contents.
 - Serialization and reparsing preserve every public and extension field.
 - Unknown namespaced extensions are preserved but are not interpreted by the
@@ -55,7 +57,9 @@ These functions do not calculate a clinical metric or access runtime data.
 
 `apps/web/src/shared/cmr-result.generated.ts` is generated from the canonical
 schema. Modules import the generated declarations or wrap them with a narrow
-adapter; they must not copy the envelope into a private interface.
+adapter; they must not copy the envelope into a private interface. Frontend
+code treats fingerprints as opaque and does not recompute them with
+`JSON.stringify`.
 
 ## Extension rules
 
@@ -72,3 +76,5 @@ adapter; they must not copy the envelope into a private interface.
 - Staleness detection depends on immutable upstream version discipline.
 - No legacy result adapter or persistence migration is included.
 - No production API route or UI is connected in this task.
+- The v1 fingerprint profile is backend-authoritative rather than a
+  language-neutral JSON canonicalization standard.
