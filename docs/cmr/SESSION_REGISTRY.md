@@ -3,7 +3,7 @@
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
 | CMR-00 | Program control and integration | technically_verified | PR #1 merged；Cockpit PR #3 open | merge `3c6f21f`与父提交已在服务器核验；基线tag `cmr-m0-governance-merged-20260904`已推送；PR #3等待CI与工程评审 | not applicable |
-| CMR-01 | Shared foundation | technically_verified | PR #2 open from `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | rebased verification commit `748767c`：28项Python、生成类型、compile、diff与17项Node测试通过；TypeScript编译因缺少tsc阻塞；ADR-002与CI待评审 | not scheduled |
+| CMR-01 | Shared foundation | technically_verified | PR #2 open from `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | 架构修复提交`00cd6c0`：31项Python、生成类型、compile、diff、17项Node与TypeScript 5.9.3检查通过；ADR-002授权接受与CI待核验 | not scheduled |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
 | CMR-20 | T1 Mapping/ECV | planned | not created | none | not scheduled |

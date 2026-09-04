@@ -14,8 +14,8 @@
 
 | Session | 功能 | 状态 | 分支 | Commit | Issue/PR | 阻塞 | 下一步 |
 |---|---|---|---|---|---|---|---|
-| CMR-00 | 仓库治理与多 session 总控 | technically_verified | `chore/cmr-m0-governance` | `f52a53d` | #1 / #1 | Cockpit PR #3的GitHub CI和工程评审待完成 | 以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪PR #3 CI |
-| CMR-01 | 共享结果契约与质量底座 | technically_verified | `feat/cmr-01-result-contract` | `748767c` | — / #2 | apps/web TypeScript typecheck 因前端依赖未安装而找不到 tsc；ADR-002 尚待架构评审 | 在 PR #2 完成 ADR-002 架构评审并检查 GitHub CI |
+| CMR-00 | 仓库治理与多 session 总控 | technically_verified | `chore/cmr-m0-governance` | `f52a53d` | #1 / #1 | Cockpit PR #3的GitHub CI和工程评审待完成 | 以CMR-01 PR #2为主线核验CI并完成ADR-002授权架构评审，同时跟踪PR #3 CI |
+| CMR-01 | 共享结果契约与质量底座 | technically_verified | `feat/cmr-01-result-contract` | `00cd6c0` | — / #2 | ADR-002 尚待授权架构评审者接受；GitHub PR #2 CI 尚待核验 | 核验 PR #2 GitHub CI，并由授权架构评审者接受或退回 ADR-002 |
 | CMR-10 | Cine心功能 | planned | `not-created` | `0000000` | — / — | 等待共享底座契约 | 完成临床输入、输出单位和失败条件的功能规划 |
 | CMR-11 | Cine应变 | planned | `not-created` | `0000000` | — / — | 等待共享底座和Cine心功能边界 | 定义proxy与validated Feature Tracking的区别 |
 | CMR-20 | T1 Mapping/ECV | planned | `not-created` | `0000000` | — / — | 等待共享底座契约 | 完成配准、ECV公式和质量门槛规划 |
@@ -33,7 +33,7 @@
 - 测试：CMR governance unit tests=passed;Python compileall boundary=passed;workflow YAML parse=passed
 - 医生复核：`not_applicable`
 - 阻塞：Cockpit PR #3的GitHub CI和工程评审待完成
-- 唯一下一步：以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪PR #3 CI
+- 唯一下一步：以CMR-01 PR #2为主线核验CI并完成ADR-002授权架构评审，同时跟踪PR #3 CI
 - 证据索引：`docs/cmr/decisions/ADR-001-repository-boundary.md`, `docs/cmr/HANDOFF_CONTRACT.md`, `tests/cmr/test_repository_safety.py`, `tests/cmr/test_status_board.py`, `docs/cmr/CODEX_TASK_REGISTRY.json`
 
 ### 当前正式门禁
@@ -54,15 +54,15 @@
 
 ## CMR-01 · 共享结果契约与质量底座
 
-- 状态：`technically_verified`；更新时间：`2026-09-04T11:09:22+08:00`；数据范围：`synthetic`
+- 状态：`technically_verified`；更新时间：`2026-09-04T11:24:28+08:00`；数据范围：`synthetic`
 - 依赖：无
-- 已实现：canonical JSON Schema result envelope v1；schema-driven backend parse validation serialization and stale checks；generated frontend TypeScript contract boundary with drift check；synthetic scalar dimensionless artifact and negative fixtures；proposed ADR-002 and CMR-01 specification evidence；rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f；branch pushed to origin；GitHub PR #2 已建立并进入架构与工程评审
+- 已实现：canonical JSON Schema result envelope v1；schema-driven backend parse validation serialization and stale checks；generated frontend TypeScript contract boundary with drift check；synthetic scalar dimensionless artifact and negative fixtures；proposed ADR-002 and CMR-01 specification evidence；rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f；branch pushed to origin；GitHub PR #2 已建立并进入架构与工程评审；backend-authoritative v1 fingerprint profile with golden vector；verified input_fingerprint and closed declared lineage
 - 仅演示：暂无
-- 尚未实现：architecture acceptance of ADR-002；frontend TypeScript compiler execution；downstream module adapters；legacy migration；database persistence；production integration；physician review
-- 测试：CMR contract tests (21)=passed;CMR governance regressions (7)=passed;generated type drift check=passed;Python compile boundary=passed;git diff check=passed;apps/web Node tests (17)=passed;apps/web TypeScript typecheck=blocked
+- 尚未实现：architecture acceptance of ADR-002；downstream module adapters；legacy migration；database persistence；production integration；physician review
+- 测试：CMR contract tests (24)=passed;CMR governance regressions (7)=passed;generated type drift check=passed;Python compile boundary=passed;git diff check=passed;apps/web Node tests (17)=passed;apps/web TypeScript 5.9.3 typecheck=passed
 - 医生复核：`not_scheduled`
-- 阻塞：apps/web TypeScript typecheck 因前端依赖未安装而找不到 tsc；ADR-002 尚待架构评审
-- 唯一下一步：在 PR #2 完成 ADR-002 架构评审并检查 GitHub CI
+- 阻塞：ADR-002 尚待授权架构评审者接受；GitHub PR #2 CI 尚待核验
+- 唯一下一步：核验 PR #2 GitHub CI，并由授权架构评审者接受或退回 ADR-002
 - 证据索引：`contracts/cmr/result-envelope.schema.json`, `docs/cmr/decisions/ADR-002-result-contract-v1.md`, `docs/cmr/features/CMR-01/ACCEPTANCE.md`
 
 ## CMR-10 · Cine心功能
@@ -145,10 +145,10 @@
 
 ## 正在推进的 Codex 对话
 
-状态快照观测时间：`2026-09-04T11:09:22+08:00`。任务状态可能随后变化，thread ID 用于回到原对话核验。
+状态快照观测时间：`2026-09-04T11:24:28+08:00`。任务状态可能随后变化，thread ID 用于回到原对话核验。
 
 | 对话 | Session | 状态快照 | 职责 | 最后活动 | Thread ID |
 |---|---|---|---|---|---|
-| CMR-00 · 总控与集成 | CMR-00 | idle | 仓库治理、Cockpit、跨 session 集成与交接门禁 | `2026-09-04T11:09:22+08:00` | `01a051e9-5dcf-7ea3-80ad-ddce1ae5260a` |
+| CMR-00 · 总控与集成 | CMR-00 | idle | 仓库治理、Cockpit、跨 session 集成与交接门禁 | `2026-09-04T11:24:28+08:00` | `01a051e9-5dcf-7ea3-80ad-ddce1ae5260a` |
 | 建立 CMR 结果公共契约 | CMR-01 | idle | CMR-01 公共结果契约、校验、共享类型与合成测试 | `2026-09-02T14:42:35+08:00` | `01a06008-72ad-79d2-855a-8ba17c3eba87` |
-| CMR-01 · 服务器转移、PR与架构评审 | CMR-01 | active | 以CMR-01为主线完成Git交付、PR追踪、ADR-002评审与下一阶段门禁 | `2026-09-04T11:09:22+08:00` | `01a05643-d7d7-7f32-a322-f59f143666c8` |
+| CMR-01 · 服务器转移、PR与架构评审 | CMR-01 | active | 以CMR-01为主线完成Git交付、PR追踪、ADR-002评审与下一阶段门禁 | `2026-09-04T11:24:28+08:00` | `01a05643-d7d7-7f32-a322-f59f143666c8` |

@@ -34,7 +34,7 @@
   ],
   "physician_review": {"state": "not_applicable", "cases": []},
   "blockers": ["Cockpit PR #3的GitHub CI和工程评审待完成"],
-  "next_action": "以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪PR #3 CI",
+  "next_action": "以CMR-01 PR #2为主线核验CI并完成ADR-002授权架构评审，同时跟踪PR #3 CI",
   "evidence_refs": [
     "docs/cmr/decisions/ADR-001-repository-boundary.md",
     "docs/cmr/HANDOFF_CONTRACT.md",
@@ -107,4 +107,4 @@ cmr-status -->
 
 - 完成：M0仓库治理、敏感文件门禁、云端交接契约、多session边界及Cockpit基础验证。
 - 已知反例/失败边界：看板只展示脱敏工程状态，不证明算法临床有效，也不替代PR页面或医生验收。
-- 下一步：以CMR-01 PR #2为主线完成ADR-002架构评审，同时跟踪Cockpit PR #3 CI。
+- 下一步：以CMR-01 PR #2为主线核验CI并完成ADR-002授权架构评审，同时跟踪Cockpit PR #3 CI。

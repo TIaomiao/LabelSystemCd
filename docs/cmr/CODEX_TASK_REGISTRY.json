@@ -1,6 +1,6 @@
 {
   "schema_version": "cmr.codex-task-registry.v1",
-  "observed_at": "2026-09-04T11:09:22+08:00",
+  "observed_at": "2026-09-04T11:24:28+08:00",
   "source_note": "人工筛选的 Codex 任务列表快照；仅登记 CMR 产品能力建设相关对话。",
   "tasks": [
     {
@@ -10,7 +10,7 @@
         "CMR-00"
       ],
       "state_snapshot": "idle",
-      "last_activity_at": "2026-09-04T11:09:22+08:00",
+      "last_activity_at": "2026-09-04T11:24:28+08:00",
       "responsibility": "仓库治理、Cockpit、跨 session 集成与交接门禁"
     },
     {
@@ -30,7 +30,7 @@
         "CMR-01"
       ],
       "state_snapshot": "active",
-      "last_activity_at": "2026-09-04T11:09:22+08:00",
+      "last_activity_at": "2026-09-04T11:24:28+08:00",
       "responsibility": "以CMR-01为主线完成Git交付、PR追踪、ADR-002评审与下一阶段门禁"
     }
   ]
