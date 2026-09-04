@@ -20,10 +20,13 @@
 - [x] `python3 -m unittest tests.cmr.test_result_contract` (21 passed)
 - [x] existing CMR governance tests (7 passed)
 - [x] Python compile boundary
-- [ ] frontend typecheck/test: blocked because the server shell has no `npm`
+- [x] `npm --prefix apps/web run test` (17 passed)
+- [ ] frontend typecheck: blocked because `tsc` is not installed in the
+  worktree; Node and npm are available
 - [x] `git diff --check`
 - [x] tracked CMR sensitive-artifact/signature scan
-- [ ] dashboard generation and `--check`: blocked because no repository command exists
+- [ ] Cockpit status synchronization and generated-dashboard checks are owned
+  by the separate `feat/cmr-session-cockpit-mvp` branch
 
 ## Evidence scope
 
