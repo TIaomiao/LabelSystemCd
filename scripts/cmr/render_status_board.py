@@ -214,9 +214,9 @@ def render_html(
     <section id="summary" class="summary"></section>
     <h2 class="section-title">正式门禁与证据</h2>
     <section id="gates"></section>
-    <h2 class="section-title">Session 状态</h2>
+    <h2 class="section-title">功能交付状态（来自 STATUS.md）</h2>
     <section id="cards" class="grid"></section>
-    <h2 class="section-title">正在推进的 Codex 对话</h2>
+    <h2 class="section-title">Codex 对话运行状态（人工快照，不代表交付）</h2>
     <section id="tasks" class="panel"></section>
     <footer>生成自仓库内脱敏状态与人工登记的 Codex 任务快照。不要写入病例、DICOM、日志、凭据、模型信息或服务器绝对路径。</footer>
   </main>

@@ -54,9 +54,9 @@
     <section id="summary" class="summary"></section>
     <h2 class="section-title">正式门禁与证据</h2>
     <section id="gates"></section>
-    <h2 class="section-title">Session 状态</h2>
+    <h2 class="section-title">功能交付状态（来自 STATUS.md）</h2>
     <section id="cards" class="grid"></section>
-    <h2 class="section-title">正在推进的 Codex 对话</h2>
+    <h2 class="section-title">Codex 对话运行状态（人工快照，不代表交付）</h2>
     <section id="tasks" class="panel"></section>
     <footer>生成自仓库内脱敏状态与人工登记的 Codex 任务快照。不要写入病例、DICOM、日志、凭据、模型信息或服务器绝对路径。</footer>
   </main>
@@ -73,7 +73,7 @@
     "issue": "#1",
     "pr": "#1",
     "head_commit": "f52a53d",
-    "updated_at": "2026-09-02T11:33:38+08:00",
+    "updated_at": "2026-09-04T09:38:41+08:00",
     "data_scope": "none",
     "depends_on": [],
     "implemented": [
@@ -81,13 +81,14 @@
       "模块manifest和治理测试",
       "云端规划到Codex执行的交接契约",
       "仓库边界ADR-001",
-      "TIaomiao专用SSH key已创建并完成人工认证"
+      "TIaomiao专用SSH key已创建并完成人工认证",
+      "构建者报告PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f"
     ],
     "demo_only": [
       "静态session看板原型和Codex对话追溯"
     ],
     "not_done": [
-      "当前PR工程人工评审",
+      "服务器核验合并提交3c6f21f",
       "合并后的main基线tag",
       "TIaomiao Git identity统一",
       "Cockpit分支推送和独立PR"
@@ -111,10 +112,9 @@
       "cases": []
     },
     "blockers": [
-      "PR当前头f52a53d的GitHub CI需在登录页面确认2/2；工程review尚未完成",
-      "Cockpit推送需构建者在交互终端解锁加密SSH key"
+      "当前Codex进程没有已解锁的TIaomiao SSH agent，尚不能fetch核验3c6f21f或push分支"
     ],
-    "next_action": "完成Cockpit v1.1验证；构建者交互解锁专用key后推送并创建独立PR",
+    "next_action": "在可用的TIaomiao SSH会话中fetch并核验3c6f21f，建立新main基线tag，然后对齐并推送CMR-01",
     "evidence_refs": [
       "docs/cmr/decisions/ADR-001-repository-boundary.md",
       "docs/cmr/HANDOFF_CONTRACT.md",
@@ -126,30 +126,30 @@
       {
         "id": "pr1_current_checks",
         "label": "PR #1 当前头 Checks",
-        "state": "unverified",
+        "state": "passed",
         "evidence_commit": "f52a53d",
-        "summary": "当前头目标为2/2；需在已登录GitHub页面重新确认，不能沿用旧截图。",
-        "verified_at": null,
-        "freshness": "unverified",
+        "summary": "构建者于2026-09-04报告当前头f52a53d的Checks为2/2通过。",
+        "verified_at": "2026-09-04",
+        "freshness": "current",
         "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1/checks"
       },
       {
         "id": "pr1_engineering_review",
         "label": "PR #1 工程评审",
-        "state": "pending",
+        "state": "passed",
         "evidence_commit": "f52a53d",
-        "summary": "等待师兄完成工程review。",
-        "verified_at": null,
-        "freshness": "unverified",
+        "summary": "构建者于2026-09-04确认师兄已完成工程确认。",
+        "verified_at": "2026-09-04",
+        "freshness": "current",
         "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1"
       },
       {
         "id": "pr1_merge",
         "label": "PR #1 合并",
-        "state": "pending",
-        "evidence_commit": "f52a53d",
-        "summary": "Checks与工程review闭合后才能合并并建立新main基线tag。",
-        "verified_at": null,
+        "state": "passed",
+        "evidence_commit": "3c6f21f",
+        "summary": "构建者报告PR #1已合并为3c6f21f；服务器对象核验和基线tag仍待SSH会话可用后完成。",
+        "verified_at": "2026-09-04",
         "freshness": "unverified",
         "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1"
       }
@@ -168,7 +168,7 @@
     ],
     "cockpit_delivery": {
       "branch": "feat/cmr-session-cockpit-mvp",
-      "verified_commit": "1b9780a",
+      "verified_commit": "8133d3f",
       "tests": {
         "passed": 12,
         "total": 12,
@@ -177,43 +177,87 @@
       "render_checks": "passed",
       "bundle": "verified",
       "remote_state": "not_pushed",
-      "updated_at": "2026-09-02T11:33:38+08:00"
+      "updated_at": "2026-09-04T09:38:41+08:00"
     }
   },
   {
     "schema_version": "cmr.session-status.v1",
     "session_id": "CMR-01",
     "feature": "共享结果契约与质量底座",
-    "state": "planned",
+    "state": "technically_verified",
     "owner_role": "builder",
-    "branch": "not-created",
-    "worktree_id": null,
+    "branch": "feat/cmr-01-result-contract",
+    "worktree_id": "cmr-01-result-contract",
     "issue": null,
     "pr": null,
-    "head_commit": "0000000",
-    "updated_at": "2026-09-01T12:00:00+08:00",
-    "data_scope": "none",
-    "depends_on": [],
-    "implemented": [],
+    "head_commit": "de7a1e3",
+    "updated_at": "2026-09-04T09:38:41+08:00",
+    "data_scope": "synthetic",
+    "depends_on": [
+      "CMR-00 merged as 3c6f21f; server fetch verification pending"
+    ],
+    "implemented": [
+      "canonical JSON Schema result envelope v1",
+      "schema-driven backend parse validation serialization and stale checks",
+      "generated frontend TypeScript contract boundary with drift check",
+      "synthetic scalar dimensionless artifact and negative fixtures",
+      "proposed ADR-002 and CMR-01 specification evidence"
+    ],
     "demo_only": [],
     "not_done": [
-      "契约评审",
-      "坐标/轮廓/provenance/quality实现"
+      "architecture acceptance of ADR-002",
+      "frontend TypeScript compiler execution",
+      "downstream module adapters",
+      "legacy migration",
+      "database persistence",
+      "production integration",
+      "physician review"
     ],
     "tests": [
       {
-        "name": "未开始",
-        "result": "not_run"
+        "name": "CMR contract tests (21)",
+        "result": "passed"
+      },
+      {
+        "name": "CMR governance regressions (7)",
+        "result": "passed"
+      },
+      {
+        "name": "generated type drift check",
+        "result": "passed"
+      },
+      {
+        "name": "Python compile boundary",
+        "result": "passed"
+      },
+      {
+        "name": "git diff check",
+        "result": "passed"
+      },
+      {
+        "name": "apps/web Node tests (17)",
+        "result": "passed"
+      },
+      {
+        "name": "apps/web TypeScript typecheck",
+        "result": "blocked"
       }
     ],
     "physician_review": {
       "state": "not_scheduled",
       "cases": []
     },
-    "blockers": [],
-    "next_action": "由云端规划生成共享底座Issue并确认公共契约范围",
+    "blockers": [
+      "merged main 3c6f21f is not yet fetched into the zian clone because this Codex process has no unlocked SSH agent",
+      "apps/web typecheck cannot find tsc because frontend dependencies are not installed",
+      "ADR-002 requires architecture review",
+      "branch has no upstream and PR is not open"
+    ],
+    "next_action": "Fetch and verify merged main 3c6f21f, establish the reviewed baseline, then align and open the CMR-01 pull request",
     "evidence_refs": [
-      "docs/cmr/ARCHITECTURE.md"
+      "contracts/cmr/result-envelope.schema.json",
+      "docs/cmr/decisions/ADR-002-result-contract-v1.md",
+      "docs/cmr/features/CMR-01/ACCEPTANCE.md"
     ]
   },
   {

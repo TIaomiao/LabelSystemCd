@@ -12,7 +12,7 @@
   "issue": "#1",
   "pr": "#1",
   "head_commit": "f52a53d",
-  "updated_at": "2026-09-02T11:33:38+08:00",
+  "updated_at": "2026-09-04T09:38:41+08:00",
   "data_scope": "none",
   "depends_on": [],
   "implemented": [
@@ -20,10 +20,11 @@
     "模块manifest和治理测试",
     "云端规划到Codex执行的交接契约",
     "仓库边界ADR-001",
-    "TIaomiao专用SSH key已创建并完成人工认证"
+    "TIaomiao专用SSH key已创建并完成人工认证",
+    "构建者报告PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f"
   ],
   "demo_only": ["静态session看板原型和Codex对话追溯"],
-  "not_done": ["当前PR工程人工评审", "合并后的main基线tag", "TIaomiao Git identity统一", "Cockpit分支推送和独立PR"],
+  "not_done": ["服务器核验合并提交3c6f21f", "合并后的main基线tag", "TIaomiao Git identity统一", "Cockpit分支推送和独立PR"],
   "tests": [
     {"name": "CMR governance unit tests", "result": "passed"},
     {"name": "Python compileall boundary", "result": "passed"},
@@ -31,10 +32,9 @@
   ],
   "physician_review": {"state": "not_applicable", "cases": []},
   "blockers": [
-    "PR当前头f52a53d的GitHub CI需在登录页面确认2/2；工程review尚未完成",
-    "Cockpit推送需构建者在交互终端解锁加密SSH key"
+    "当前Codex进程没有已解锁的TIaomiao SSH agent，尚不能fetch核验3c6f21f或push分支"
   ],
-  "next_action": "完成Cockpit v1.1验证；构建者交互解锁专用key后推送并创建独立PR",
+  "next_action": "在可用的TIaomiao SSH会话中fetch并核验3c6f21f，建立新main基线tag，然后对齐并推送CMR-01",
   "evidence_refs": [
     "docs/cmr/decisions/ADR-001-repository-boundary.md",
     "docs/cmr/HANDOFF_CONTRACT.md",
@@ -46,30 +46,30 @@
     {
       "id": "pr1_current_checks",
       "label": "PR #1 当前头 Checks",
-      "state": "unverified",
+      "state": "passed",
       "evidence_commit": "f52a53d",
-      "summary": "当前头目标为2/2；需在已登录GitHub页面重新确认，不能沿用旧截图。",
-      "verified_at": null,
-      "freshness": "unverified",
+      "summary": "构建者于2026-09-04报告当前头f52a53d的Checks为2/2通过。",
+      "verified_at": "2026-09-04",
+      "freshness": "current",
       "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1/checks"
     },
     {
       "id": "pr1_engineering_review",
       "label": "PR #1 工程评审",
-      "state": "pending",
+      "state": "passed",
       "evidence_commit": "f52a53d",
-      "summary": "等待师兄完成工程review。",
-      "verified_at": null,
-      "freshness": "unverified",
+      "summary": "构建者于2026-09-04确认师兄已完成工程确认。",
+      "verified_at": "2026-09-04",
+      "freshness": "current",
       "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1"
     },
     {
       "id": "pr1_merge",
       "label": "PR #1 合并",
-      "state": "pending",
-      "evidence_commit": "f52a53d",
-      "summary": "Checks与工程review闭合后才能合并并建立新main基线tag。",
-      "verified_at": null,
+      "state": "passed",
+      "evidence_commit": "3c6f21f",
+      "summary": "构建者报告PR #1已合并为3c6f21f；服务器对象核验和基线tag仍待SSH会话可用后完成。",
+      "verified_at": "2026-09-04",
       "freshness": "unverified",
       "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1"
     }
@@ -88,7 +88,7 @@
   ],
   "cockpit_delivery": {
     "branch": "feat/cmr-session-cockpit-mvp",
-    "verified_commit": "1b9780a",
+    "verified_commit": "8133d3f",
     "tests": {
       "passed": 12,
       "total": 12,
@@ -97,7 +97,7 @@
     "render_checks": "passed",
     "bundle": "verified",
     "remote_state": "not_pushed",
-    "updated_at": "2026-09-02T11:33:38+08:00"
+    "updated_at": "2026-09-04T09:38:41+08:00"
   }
 }
 cmr-status -->
@@ -106,4 +106,4 @@ cmr-status -->
 
 - 完成：M0仓库治理、敏感文件门禁、云端交接契约、多session边界及Cockpit基础验证。
 - 已知反例/失败边界：看板只展示脱敏工程状态，不证明算法临床有效，也不替代PR页面或医生验收。
-- 下一步：完成Cockpit v1.1验证；解锁专用key后推送并建立PR，同时继续确认PR #1当前头Checks和工程review。
+- 下一步：在可用的TIaomiao SSH会话中核验合并提交、建立main基线tag，再对齐并推送CMR-01。
