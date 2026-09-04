@@ -14,8 +14,8 @@
 
 | Session | 功能 | 状态 | 分支 | Commit | Issue/PR | 阻塞 | 下一步 |
 |---|---|---|---|---|---|---|---|
-| CMR-00 | 仓库治理与多 session 总控 | technically_verified | `chore/cmr-m0-governance` | `f52a53d` | #1 / #1 | 当前Codex进程没有已解锁的TIaomiao SSH agent，尚不能fetch核验3c6f21f或push分支 | 在可用的TIaomiao SSH会话中fetch并核验3c6f21f，建立新main基线tag，然后对齐并推送CMR-01 |
-| CMR-01 | 共享结果契约与质量底座 | technically_verified | `feat/cmr-01-result-contract` | `de7a1e3` | — / — | merged main 3c6f21f is not yet fetched into the zian clone because this Codex process has no unlocked SSH agent；apps/web typecheck cannot find tsc because frontend dependencies are not installed；ADR-002 requires architecture review；branch has no upstream and PR is not open | Fetch and verify merged main 3c6f21f, establish the reviewed baseline, then align and open the CMR-01 pull request |
+| CMR-00 | 仓库治理与多 session 总控 | technically_verified | `chore/cmr-m0-governance` | `f52a53d` | #1 / #1 | Cockpit分支尚未推送且PR未建立 | 推送Cockpit分支并建立独立PR，然后推进CMR-01架构评审 |
+| CMR-01 | 共享结果契约与质量底座 | technically_verified | `feat/cmr-01-result-contract` | `748767c` | — / — | apps/web typecheck cannot find tsc because frontend dependencies are not installed；ADR-002 requires architecture review；branch has no upstream and PR is not open | Push feat/cmr-01-result-contract and open its pull request for architecture and engineering review |
 | CMR-10 | Cine心功能 | planned | `not-created` | `0000000` | — / — | 等待共享底座契约 | 完成临床输入、输出单位和失败条件的功能规划 |
 | CMR-11 | Cine应变 | planned | `not-created` | `0000000` | — / — | 等待共享底座和Cine心功能边界 | 定义proxy与validated Feature Tracking的区别 |
 | CMR-20 | T1 Mapping/ECV | planned | `not-created` | `0000000` | — / — | 等待共享底座契约 | 完成配准、ECV公式和质量门槛规划 |
@@ -25,22 +25,22 @@
 
 ## CMR-00 · 仓库治理与多 session 总控
 
-- 状态：`technically_verified`；更新时间：`2026-09-04T09:38:41+08:00`；数据范围：`none`
+- 状态：`technically_verified`；更新时间：`2026-09-04T10:42:30+08:00`；数据范围：`none`
 - 依赖：无
-- 已实现：CMR目录边界与分层AGENTS.md；模块manifest和治理测试；云端规划到Codex执行的交接契约；仓库边界ADR-001；TIaomiao专用SSH key已创建并完成人工认证；构建者报告PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f
+- 已实现：CMR目录边界与分层AGENTS.md；模块manifest和治理测试；云端规划到Codex执行的交接契约；仓库边界ADR-001；TIaomiao专用SSH key已创建并完成人工认证；PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f；服务器已核验合并提交并推送基线tag cmr-m0-governance-merged-20260904
 - 仅演示：静态session看板原型和Codex对话追溯
-- 尚未实现：服务器核验合并提交3c6f21f；合并后的main基线tag；TIaomiao Git identity统一；Cockpit分支推送和独立PR
+- 尚未实现：TIaomiao Git identity统一；Cockpit分支推送和独立PR
 - 测试：CMR governance unit tests=passed;Python compileall boundary=passed;workflow YAML parse=passed
 - 医生复核：`not_applicable`
-- 阻塞：当前Codex进程没有已解锁的TIaomiao SSH agent，尚不能fetch核验3c6f21f或push分支
-- 唯一下一步：在可用的TIaomiao SSH会话中fetch并核验3c6f21f，建立新main基线tag，然后对齐并推送CMR-01
+- 阻塞：Cockpit分支尚未推送且PR未建立
+- 唯一下一步：推送Cockpit分支并建立独立PR，然后推进CMR-01架构评审
 - 证据索引：`docs/cmr/decisions/ADR-001-repository-boundary.md`, `docs/cmr/HANDOFF_CONTRACT.md`, `tests/cmr/test_repository_safety.py`, `tests/cmr/test_status_board.py`, `docs/cmr/CODEX_TASK_REGISTRY.json`
 
 ### 当前正式门禁
 
 - PR #1 当前头 Checks：`passed`；证据提交 `f52a53d`；新鲜度 `current`；核验时间 `2026-09-04`；构建者于2026-09-04报告当前头f52a53d的Checks为2/2通过。
 - PR #1 工程评审：`passed`；证据提交 `f52a53d`；新鲜度 `current`；核验时间 `2026-09-04`；构建者于2026-09-04确认师兄已完成工程确认。
-- PR #1 合并：`passed`；证据提交 `3c6f21f`；新鲜度 `unverified`；核验时间 `2026-09-04`；构建者报告PR #1已合并为3c6f21f；服务器对象核验和基线tag仍待SSH会话可用后完成。
+- PR #1 合并：`passed`；证据提交 `3c6f21f`；新鲜度 `current`；核验时间 `2026-09-04`；PR #1已合并为3c6f21f；服务器已fetch核验并推送新main基线tag。
 
 ### 历史证据（不得沿用为当前门禁）
 
@@ -48,21 +48,21 @@
 
 ### Cockpit 交付
 
-- 分支：`feat/cmr-session-cockpit-mvp`；最近验证提交：`8133d3f`
+- 分支：`feat/cmr-session-cockpit-mvp`；最近验证提交：`5cce2e5`
 - 测试：`12/12`；生成检查：`passed`；bundle：`verified`
-- 远端状态：`not_pushed`；更新时间：`2026-09-04T09:38:41+08:00`
+- 远端状态：`not_pushed`；更新时间：`2026-09-04T10:42:30+08:00`
 
 ## CMR-01 · 共享结果契约与质量底座
 
-- 状态：`technically_verified`；更新时间：`2026-09-04T09:38:41+08:00`；数据范围：`synthetic`
-- 依赖：CMR-00 merged as 3c6f21f; server fetch verification pending
-- 已实现：canonical JSON Schema result envelope v1；schema-driven backend parse validation serialization and stale checks；generated frontend TypeScript contract boundary with drift check；synthetic scalar dimensionless artifact and negative fixtures；proposed ADR-002 and CMR-01 specification evidence
+- 状态：`technically_verified`；更新时间：`2026-09-04T10:42:30+08:00`；数据范围：`synthetic`
+- 依赖：无
+- 已实现：canonical JSON Schema result envelope v1；schema-driven backend parse validation serialization and stale checks；generated frontend TypeScript contract boundary with drift check；synthetic scalar dimensionless artifact and negative fixtures；proposed ADR-002 and CMR-01 specification evidence；rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f
 - 仅演示：暂无
 - 尚未实现：architecture acceptance of ADR-002；frontend TypeScript compiler execution；downstream module adapters；legacy migration；database persistence；production integration；physician review
 - 测试：CMR contract tests (21)=passed;CMR governance regressions (7)=passed;generated type drift check=passed;Python compile boundary=passed;git diff check=passed;apps/web Node tests (17)=passed;apps/web TypeScript typecheck=blocked
 - 医生复核：`not_scheduled`
-- 阻塞：merged main 3c6f21f is not yet fetched into the zian clone because this Codex process has no unlocked SSH agent；apps/web typecheck cannot find tsc because frontend dependencies are not installed；ADR-002 requires architecture review；branch has no upstream and PR is not open
-- 唯一下一步：Fetch and verify merged main 3c6f21f, establish the reviewed baseline, then align and open the CMR-01 pull request
+- 阻塞：apps/web typecheck cannot find tsc because frontend dependencies are not installed；ADR-002 requires architecture review；branch has no upstream and PR is not open
+- 唯一下一步：Push feat/cmr-01-result-contract and open its pull request for architecture and engineering review
 - 证据索引：`contracts/cmr/result-envelope.schema.json`, `docs/cmr/decisions/ADR-002-result-contract-v1.md`, `docs/cmr/features/CMR-01/ACCEPTANCE.md`
 
 ## CMR-10 · Cine心功能

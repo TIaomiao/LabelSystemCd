@@ -2,8 +2,8 @@
 
 | ID | Feature | State | Branch/worktree | Last verified commit | Physician review |
 |---|---|---|---|---|---|
-| CMR-00 | Program control and integration | technically_verified | `chore/cmr-m0-governance` / PR #1；Cockpit `feat/cmr-session-cockpit-mvp` | 构建者报告当前头 `f52a53d` 的2/2 Checks与师兄确认已闭合，PR #1已合并为 `3c6f21f`；服务器fetch核验和新main基线tag待完成 | not applicable |
-| CMR-01 | Shared foundation | technically_verified | `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | `de7a1e3`：28项Python、生成类型、compile、diff与17项Node测试通过；TypeScript编译因缺少tsc阻塞；尚未推送/建PR | not scheduled |
+| CMR-00 | Program control and integration | technically_verified | PR #1 merged；Cockpit `feat/cmr-session-cockpit-mvp` | merge `3c6f21f`与父提交已在服务器核验；基线tag `cmr-m0-governance-merged-20260904`已推送 | not applicable |
+| CMR-01 | Shared foundation | technically_verified | `feat/cmr-01-result-contract` / worktree `cmr-01-result-contract` | rebased verification commit `748767c`：28项Python、生成类型、compile、diff与17项Node测试通过；TypeScript编译因缺少tsc阻塞；尚未推送/建PR | not scheduled |
 | CMR-10 | Cine function | planned | not created | none | not scheduled |
 | CMR-11 | Cine strain | planned | not created | none | not scheduled |
 | CMR-20 | T1 Mapping/ECV | planned | not created | none | not scheduled |
@@ -19,9 +19,9 @@ Each handoff must record scope, branch, worktree, baseline tag, last commit, imp
   successful checks at `fad0529`. The repository contains one job in each of
   the CMR Governance and Workstation workflows; both are required for this PR.
 - The builder reported on 2026-09-04 that the current `f52a53d` checks passed
-  2/2, senior engineering confirmation completed, and PR #1 merged as
-  `3c6f21f`. The current Codex process still needs an unlocked SSH session to
-  fetch the object and establish the new main baseline tag.
+  2/2 and senior engineering confirmation completed. PR #1 merged as
+  `3c6f21f`; the server verified the merge object and pushed baseline tag
+  `cmr-m0-governance-merged-20260904`.
 - The push credential used for this PR was verified directly on the transfer
   account with `ssh -T git@github.com`, which authenticated as `LarryUESTC`.
   Commit author/committer identity is separately configured as `Codex-Backup`.

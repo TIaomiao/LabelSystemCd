@@ -73,7 +73,7 @@
     "issue": "#1",
     "pr": "#1",
     "head_commit": "f52a53d",
-    "updated_at": "2026-09-04T09:38:41+08:00",
+    "updated_at": "2026-09-04T10:42:30+08:00",
     "data_scope": "none",
     "depends_on": [],
     "implemented": [
@@ -82,14 +82,13 @@
       "云端规划到Codex执行的交接契约",
       "仓库边界ADR-001",
       "TIaomiao专用SSH key已创建并完成人工认证",
-      "构建者报告PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f"
+      "PR #1当前头2/2 Checks通过、师兄已确认并合并为3c6f21f",
+      "服务器已核验合并提交并推送基线tag cmr-m0-governance-merged-20260904"
     ],
     "demo_only": [
       "静态session看板原型和Codex对话追溯"
     ],
     "not_done": [
-      "服务器核验合并提交3c6f21f",
-      "合并后的main基线tag",
       "TIaomiao Git identity统一",
       "Cockpit分支推送和独立PR"
     ],
@@ -112,9 +111,9 @@
       "cases": []
     },
     "blockers": [
-      "当前Codex进程没有已解锁的TIaomiao SSH agent，尚不能fetch核验3c6f21f或push分支"
+      "Cockpit分支尚未推送且PR未建立"
     ],
-    "next_action": "在可用的TIaomiao SSH会话中fetch并核验3c6f21f，建立新main基线tag，然后对齐并推送CMR-01",
+    "next_action": "推送Cockpit分支并建立独立PR，然后推进CMR-01架构评审",
     "evidence_refs": [
       "docs/cmr/decisions/ADR-001-repository-boundary.md",
       "docs/cmr/HANDOFF_CONTRACT.md",
@@ -148,9 +147,9 @@
         "label": "PR #1 合并",
         "state": "passed",
         "evidence_commit": "3c6f21f",
-        "summary": "构建者报告PR #1已合并为3c6f21f；服务器对象核验和基线tag仍待SSH会话可用后完成。",
+        "summary": "PR #1已合并为3c6f21f；服务器已fetch核验并推送新main基线tag。",
         "verified_at": "2026-09-04",
-        "freshness": "unverified",
+        "freshness": "current",
         "source_ref": "https://github.com/TIaomiao/LabelSystemCd/pull/1"
       }
     ],
@@ -168,7 +167,7 @@
     ],
     "cockpit_delivery": {
       "branch": "feat/cmr-session-cockpit-mvp",
-      "verified_commit": "8133d3f",
+      "verified_commit": "5cce2e5",
       "tests": {
         "passed": 12,
         "total": 12,
@@ -177,7 +176,7 @@
       "render_checks": "passed",
       "bundle": "verified",
       "remote_state": "not_pushed",
-      "updated_at": "2026-09-04T09:38:41+08:00"
+      "updated_at": "2026-09-04T10:42:30+08:00"
     }
   },
   {
@@ -190,18 +189,17 @@
     "worktree_id": "cmr-01-result-contract",
     "issue": null,
     "pr": null,
-    "head_commit": "de7a1e3",
-    "updated_at": "2026-09-04T09:38:41+08:00",
+    "head_commit": "748767c",
+    "updated_at": "2026-09-04T10:42:30+08:00",
     "data_scope": "synthetic",
-    "depends_on": [
-      "CMR-00 merged as 3c6f21f; server fetch verification pending"
-    ],
+    "depends_on": [],
     "implemented": [
       "canonical JSON Schema result envelope v1",
       "schema-driven backend parse validation serialization and stale checks",
       "generated frontend TypeScript contract boundary with drift check",
       "synthetic scalar dimensionless artifact and negative fixtures",
-      "proposed ADR-002 and CMR-01 specification evidence"
+      "proposed ADR-002 and CMR-01 specification evidence",
+      "rebased onto reviewed baseline cmr-m0-governance-merged-20260904 at 3c6f21f"
     ],
     "demo_only": [],
     "not_done": [
@@ -248,12 +246,11 @@
       "cases": []
     },
     "blockers": [
-      "merged main 3c6f21f is not yet fetched into the zian clone because this Codex process has no unlocked SSH agent",
       "apps/web typecheck cannot find tsc because frontend dependencies are not installed",
       "ADR-002 requires architecture review",
       "branch has no upstream and PR is not open"
     ],
-    "next_action": "Fetch and verify merged main 3c6f21f, establish the reviewed baseline, then align and open the CMR-01 pull request",
+    "next_action": "Push feat/cmr-01-result-contract and open its pull request for architecture and engineering review",
     "evidence_refs": [
       "contracts/cmr/result-envelope.schema.json",
       "docs/cmr/decisions/ADR-002-result-contract-v1.md",
