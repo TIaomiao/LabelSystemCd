@@ -231,7 +231,7 @@ class CmrResultContractTest(unittest.TestCase):
         self.assertTrue(status["not_done"])
         self.assertEqual(
             {item["result"] for item in status["tests"]},
-            {"passed", "blocked"},
+            {"passed"},
         )
 
 
