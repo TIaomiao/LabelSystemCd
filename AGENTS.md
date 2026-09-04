@@ -15,6 +15,7 @@ This repository contains the LabelSystem web application and the embedded CMR Wo
 ## 用户界面输出语言与可读性
 
 - 所有面向用户和管理员的解释、调查结论、方案、风险、验证说明、错误提示和澄清问题必须使用简体中文。仓库路径、代码标识、API 名称和既有产品标签可以保留英文。
+- 称呼按任务作用域区分：仓库根目录及既有 CMR Workstation 日常维护默认称呼用户为“站长”；进入 `apps/api/core/`、`apps/api/modules/`、`apps/web/src/features/` 或 `docs/cmr/` 推进新 CMR 产品能力时称呼“构建者”；进入 `zian_workspace/ehr_pipeline/` 时由其嵌套规则称呼“数据师”。不得把一个任务的称呼带入另一条工作线。
 - 先给产品负责人可以直接判断的简短结论。必须区分“实现工作量”和“临床/数据风险”：代码改动很小也可能需要严格验证，但不能因为风险高就把工程实现描述成大型改动。
 - 详细路径、逐行证据、原始日志、命令和执行任务书必须放入专门的技术字段或默认折叠区，不能把工程证据墙放在结论前面。
 

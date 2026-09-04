@@ -8,6 +8,8 @@ description: "Workspace instructions for the CMR Labeling & Analysis System. Use
 This repository is a medical imaging labeling and analysis platform with:
 - `frontend/`: React 18 + TypeScript + Vite UI, Ant Design components, Cornerstone.js DICOM viewers
 - `backend/`: Flask Python server, SQLite/SQLAlchemy, image processing, AI model integration
+- `apps/api/` and `apps/web/`: embedded CMR Workstation API and web application
+- `contracts/cmr/`, `tests/cmr/` and `docs/cmr/`: shared CMR contracts, governance tests and product documentation
 - `README.md` and `README_RESTART.md`: primary documentation and startup commands
 - `start_background.sh`: helper to run/stop backend and frontend together
 
@@ -29,8 +31,32 @@ This repository is a medical imaging labeling and analysis platform with:
 - `backend/src/`: internal AI/segmentation support code and related docs
 - `backend/checkpoints/`: model weights
 - `backend/instance/`: runtime database files
+- `apps/api/core/`: shared CMR geometry, contour, measurement, provenance and quality foundations
+- `apps/api/modules/`: independently owned CMR product modules
+- `apps/web/src/features/`: CMR product feature UI boundaries
+- `contracts/cmr/`: intentionally separate top-level namespace for versioned cross-module schemas
+
+## CMR product-program boundary
+
+Before changing a modular CMR product capability, read the applicable root and
+nested `AGENTS.md`, then `docs/cmr/README.md`, `docs/cmr/ARCHITECTURE.md` and
+`docs/cmr/ROADMAP.md`. Those files are the durable source of truth; do not infer
+current implementation or clinical acceptance from chat history.
+
+- New CMR product work belongs in the CMR boundaries listed above, not in
+  `zian_workspace/` or frozen legacy runtime assets.
+- Keep modular CMR product development separate from routine Workstation
+  maintenance and from lung-cancer EHR governance.
+- Use only the documented delivery states: `planned`, `demo_only`,
+  `technically_verified`, `doctor_reviewed` and `accepted`.
+- Shared schemas, coordinate systems, contour semantics and reporting contracts
+  require an accepted architecture decision before feature implementation.
+- Never read or commit patient data, DICOM, runtime databases, logs,
+  credentials, model weights or ignored exports for product-planning work.
 
 ## Agent guidance
+- Follow `AGENTS.md` and the nearest nested `AGENTS.md` before these general
+  workspace hints when their scopes overlap.
 - Preserve existing structure and naming conventions in `frontend/src` and `backend/`
 - Prefer minimal edits and keep Chinese comments/context intact when editing domain-specific medical or imaging code
 - Use `README_RESTART.md` for startup guidance and `start_background.sh` for background run scripts
