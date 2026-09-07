@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+from functools import lru_cache
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -308,7 +309,15 @@ TWO_CH_MARKERS = ("2ch", "2-ch", "2 chamber", "two chamber", "c2ch", "lax_2", "l
 THREE_CH_MARKERS = ("3ch", "3-ch", "3 chamber", "three chamber", "c3ch", "lax_3", "lax 3")
 FOUR_CH_MARKERS = ("4ch", "4-ch", "4 chamber", "four chamber", "c4ch", "lax_4", "lax 4")
 SAX_STACK_MARKERS = ("8sl", "10sl", "12sl")
-SAX_MARKERS = ("sax", "short axis", "csax", "sbtfe_bh_m2d", "sa stack", *SAX_STACK_MARKERS)
+SAX_MARKERS = (
+    "sax",
+    "short axis",
+    "csax",
+    "sbtfe_bh_m2d",
+    "m2d_sa",
+    "sa stack",
+    *SAX_STACK_MARKERS,
+)
 CINE_MARKERS = ("cine", "retro", "btfe", "b-tfe", "sbtfe", "trufi", "truefisp", "segmented")
 NON_FUNCTION_CINE_MARKERS = (
     "survey",
@@ -339,6 +348,29 @@ NON_FUNCTION_CINE_MARKERS = (
     "ir_tfe",
     "new",
 )
+
+
+def _explicit_cine_role_from_description(
+    description: str,
+    unique_positions: int,
+    unique_phases: int,
+) -> str | None:
+    """Trust an explicit cine description over stale Philips protocol text."""
+
+    token = str(description or "").lower()
+    if unique_phases <= 1 or _has_any_token(token, NON_FUNCTION_CINE_MARKERS):
+        return None
+    if not _has_any_token(token, CINE_MARKERS):
+        return None
+    if _has_any_token(token, TWO_CH_MARKERS):
+        return "cine_lax_2ch"
+    if _has_any_token(token, THREE_CH_MARKERS):
+        return "cine_lax_3ch"
+    if _has_any_token(token, FOUR_CH_MARKERS):
+        return "cine_lax_4ch"
+    if unique_positions > 1 and _has_any_token(token, SAX_MARKERS):
+        return "cine_sax"
+    return None
 
 
 def infer_role(
@@ -375,6 +407,14 @@ def infer_role(
         if has_sax_marker or unique_positions > 1:
             return "lge_sax"
         return "lge_lax"
+
+    explicit_cine_role = _explicit_cine_role_from_description(
+        description,
+        unique_positions,
+        unique_phases,
+    )
+    if explicit_cine_role is not None:
+        return explicit_cine_role
 
     if _has_any_token(token, NON_FUNCTION_CINE_MARKERS):
         return "unknown"
@@ -442,6 +482,13 @@ def normalize_series_role(
         if has_sax_marker or slice_count > 1:
             return "lge_sax"
         return "lge_lax"
+    explicit_cine_role = _explicit_cine_role_from_description(
+        description,
+        slice_count,
+        phase_count,
+    )
+    if explicit_cine_role is not None:
+        return explicit_cine_role
     if _has_any_token(token, NON_FUNCTION_CINE_MARKERS):
         return "unknown"
     if has_4ch_marker and phase_count > 1 and role in {"lge_lax", "unknown"}:
@@ -557,6 +604,113 @@ def _dicom_time_seconds(value: Any) -> float | None:
     if hours > 23 or minutes > 59 or seconds >= 60:
         return None
     return hours * 3600 + minutes * 60 + seconds
+
+
+def _functional_sequence_value(container: Any, sequence_name: str, attribute: str) -> Any:
+    if container is None:
+        return None
+    sequence = getattr(container, sequence_name, None)
+    if not sequence:
+        return None
+    return getattr(sequence[0], attribute, None)
+
+
+def _first_available(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _vector_or_default(value: Any, length: int, default: list[float]) -> list[float]:
+    try:
+        if value is None or len(value) < length:
+            return list(default)
+        return [_safe_float(item) for item in value[:length]]
+    except TypeError:
+        return list(default)
+
+
+def _expanded_image_frame_items(ds: pydicom.dataset.FileDataset, base_item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expand Enhanced MR containers into independently indexable frames.
+
+    Classic single-frame DICOM remains byte-for-byte on the historical import
+    path.  Enhanced MR geometry and cardiac phase live in functional groups,
+    so treating the container as one image silently collapses a complete cine
+    stack into a single workstation frame.
+    """
+
+    number_of_frames = max(1, _safe_int(getattr(ds, "NumberOfFrames", 1), 1))
+    per_frame = list(getattr(ds, "PerFrameFunctionalGroupsSequence", None) or [])
+    if number_of_frames <= 1 or not per_frame:
+        return [base_item]
+
+    shared_sequence = list(getattr(ds, "SharedFunctionalGroupsSequence", None) or [])
+    shared = shared_sequence[0] if shared_sequence else None
+    expanded: list[dict[str, Any]] = []
+    for frame_index in range(number_of_frames):
+        frame = per_frame[frame_index] if frame_index < len(per_frame) else None
+        position = _first_available(
+            _functional_sequence_value(frame, "PlanePositionSequence", "ImagePositionPatient"),
+            _functional_sequence_value(shared, "PlanePositionSequence", "ImagePositionPatient"),
+            getattr(ds, "ImagePositionPatient", None),
+        )
+        orientation = _first_available(
+            _functional_sequence_value(frame, "PlaneOrientationSequence", "ImageOrientationPatient"),
+            _functional_sequence_value(shared, "PlaneOrientationSequence", "ImageOrientationPatient"),
+            getattr(ds, "ImageOrientationPatient", None),
+        )
+        pixel_spacing = _first_available(
+            _functional_sequence_value(frame, "PixelMeasuresSequence", "PixelSpacing"),
+            _functional_sequence_value(shared, "PixelMeasuresSequence", "PixelSpacing"),
+            getattr(ds, "PixelSpacing", None),
+        )
+        slice_thickness = _first_available(
+            _functional_sequence_value(frame, "PixelMeasuresSequence", "SliceThickness"),
+            _functional_sequence_value(shared, "PixelMeasuresSequence", "SliceThickness"),
+            getattr(ds, "SliceThickness", None),
+            base_item.get("slice_thickness"),
+        )
+        trigger_time = _first_available(
+            _functional_sequence_value(
+                frame,
+                "CardiacSynchronizationSequence",
+                "NominalCardiacTriggerDelayTime",
+            ),
+            getattr(ds, "TriggerTime", None),
+            0.0,
+        )
+        temporal_position = _first_available(
+            _functional_sequence_value(frame, "FrameContentSequence", "TemporalPositionIndex"),
+            _functional_sequence_value(frame, "FrameContentSequence", "FrameAcquisitionNumber"),
+            getattr(ds, "TemporalPositionIdentifier", None),
+            frame_index + 1,
+        )
+        instance_number = _first_available(
+            _functional_sequence_value(frame, "FrameContentSequence", "FrameAcquisitionNumber"),
+            getattr(ds, "InstanceNumber", None),
+            frame_index + 1,
+        )
+        spacing = _vector_or_default(pixel_spacing, 2, [1.0, 1.0])
+        expanded.append(
+            {
+                **base_item,
+                "source_frame_index": frame_index,
+                "instance_number": _safe_int(instance_number, frame_index + 1),
+                "trigger_time": _safe_float(trigger_time, float(frame_index)),
+                "temporal_position": _safe_int(temporal_position, frame_index + 1),
+                "image_position": _vector_or_default(position, 3, [0.0, 0.0, 0.0]),
+                "image_orientation": _vector_or_default(
+                    orientation,
+                    6,
+                    [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                ),
+                "pixel_spacing_x": spacing[1],
+                "pixel_spacing_y": spacing[0],
+                "slice_thickness": _safe_float(slice_thickness, 8.0),
+            }
+        )
+    return expanded
 
 
 def _split_sax_family(items: list[dict[str, Any]]) -> tuple[str, tuple[float, ...], int, int] | None:
@@ -1086,7 +1240,15 @@ def import_study(source_path: str) -> int:
         study_uid = _safe_text(getattr(ds, "StudyInstanceUID", ""))
         series_uid = _safe_text(getattr(ds, "SeriesInstanceUID", ""))
         series_description = _safe_text(getattr(ds, "SeriesDescription", file_path.parent.name))
-        series_group_key = _series_group_key(study_uid, series_uid, file_path, series_description)
+        number_of_frames = max(1, _safe_int(getattr(ds, "NumberOfFrames", 1), 1))
+        # One Enhanced MR object already contains the complete source Series.
+        # Folder/description merging is only for legacy single-frame exports;
+        # applying it here would combine separate enhanced acquisitions.
+        series_group_key = (
+            series_uid
+            if number_of_frames > 1
+            else _series_group_key(study_uid, series_uid, file_path, series_description)
+        )
         image_type = _dicom_value_text(getattr(ds, "ImageType", ""))
         protocol_name = _safe_text(getattr(ds, "ProtocolName", ""))
         scanning_sequence = _dicom_value_text(getattr(ds, "ScanningSequence", ""))
@@ -1108,7 +1270,7 @@ def import_study(source_path: str) -> int:
             "source_path": str(root),
         }
         px, py = _pixel_spacing(ds)
-        item = {
+        base_item = {
             "file_path": str(file_path),
             "folder_path": str(file_path.parent),
             "series_uid": series_group_key,
@@ -1135,7 +1297,7 @@ def import_study(source_path: str) -> int:
             "image_position": _image_position(ds),
             "image_orientation": _image_orientation(ds),
         }
-        series_groups[series_group_key].append(item)
+        series_groups[series_group_key].extend(_expanded_image_frame_items(ds, base_item))
 
     if not study_info:
         raise ValueError(
@@ -1275,6 +1437,10 @@ def import_study(source_path: str) -> int:
                         {
                             "normal_vector": [float(x) for x in normal],
                             "image_orientation": first["image_orientation"],
+                            "source_object_count": len({item["file_path"] for item in items}),
+                            "enhanced_multiframe": any(
+                                item.get("source_frame_index") is not None for item in items
+                            ),
                             "dicom_tags": {
                                 "protocol_name": first.get("protocol_name", ""),
                                 "image_type": first.get("image_type", ""),
@@ -1316,6 +1482,7 @@ def import_study(source_path: str) -> int:
                                 "pixel_spacing": [frame["pixel_spacing_x"], frame["pixel_spacing_y"]],
                                 "slice_thickness": frame["slice_thickness"],
                                 "image_orientation": frame["image_orientation"],
+                                "source_frame_index": frame.get("source_frame_index"),
                             }
                         ),
                     ),
@@ -1523,14 +1690,56 @@ def list_frame_rows(series_id: int) -> list[dict[str, Any]]:
         return [{key: row[key] for key in row.keys()} for row in rows]
 
 
+@lru_cache(maxsize=4)
+def _read_multiframe_pixels(file_path: str) -> tuple[pydicom.dataset.FileDataset, np.ndarray]:
+    dataset = pydicom.dcmread(file_path, force=True)
+    return dataset, np.asarray(dataset.pixel_array)
+
+
+def _enhanced_frame_modality_pixels(
+    dataset: pydicom.dataset.FileDataset,
+    raw: np.ndarray,
+    frame_index: int,
+) -> np.ndarray:
+    per_frame = list(getattr(dataset, "PerFrameFunctionalGroupsSequence", None) or [])
+    shared_sequence = list(getattr(dataset, "SharedFunctionalGroupsSequence", None) or [])
+    frame = per_frame[frame_index] if frame_index < len(per_frame) else None
+    shared = shared_sequence[0] if shared_sequence else None
+    transform = _first_available(
+        _functional_sequence_value(frame, "PixelValueTransformationSequence", "RescaleSlope"),
+        _functional_sequence_value(shared, "PixelValueTransformationSequence", "RescaleSlope"),
+        getattr(dataset, "RescaleSlope", None),
+    )
+    intercept = _first_available(
+        _functional_sequence_value(frame, "PixelValueTransformationSequence", "RescaleIntercept"),
+        _functional_sequence_value(shared, "PixelValueTransformationSequence", "RescaleIntercept"),
+        getattr(dataset, "RescaleIntercept", None),
+    )
+    if transform is None and intercept is None:
+        return raw.astype(np.float32)
+    slope = _safe_float(transform, 1.0)
+    offset = _safe_float(intercept, 0.0)
+    return raw.astype(np.float32) * slope + offset
+
+
 def read_frame_pixels(frame_row: dict[str, Any]) -> np.ndarray:
-    ds = pydicom.dcmread(frame_row["file_path"], force=True)
-    raw = ds.pixel_array.astype(np.float32)
-    arr = raw
-    try:
-        arr = apply_voi_lut(raw, ds)
-    except Exception:
+    metadata = loads(frame_row.get("metadata_json"), {}) or {}
+    source_frame_index = metadata.get("source_frame_index") if isinstance(metadata, dict) else None
+    if source_frame_index is None:
+        ds = pydicom.dcmread(frame_row["file_path"], force=True)
+        raw = ds.pixel_array.astype(np.float32)
         arr = raw
+        try:
+            arr = apply_voi_lut(raw, ds)
+        except Exception:
+            arr = raw
+    else:
+        ds, source_pixels = _read_multiframe_pixels(frame_row["file_path"])
+        frame_index = _safe_int(source_frame_index, -1)
+        if frame_index < 0 or frame_index >= len(source_pixels):
+            raise IndexError(f"Enhanced MR frame index out of range: {frame_index}")
+        raw = np.asarray(source_pixels[frame_index]).astype(np.float32)
+        arr = _enhanced_frame_modality_pixels(ds, raw, frame_index)
     arr = arr.astype(np.float32)
     raw_low, raw_high = np.percentile(raw, [1, 99])
     arr_low, arr_high = np.percentile(arr, [1, 99])
