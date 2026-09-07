@@ -159,6 +159,31 @@ class EnhancedMrImportTest(unittest.TestCase):
                 self.assertEqual(last.shape, (8, 8))
                 self.assertFalse(np.array_equal(first, last))
 
+    def test_reimport_does_not_restore_unknown_over_newly_detected_role(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "study"
+            source.mkdir()
+            _write_enhanced_mr(source / "enhanced.dcm")
+
+            with patch.object(db, "DB_PATH", tmp_path / "cvi.db"):
+                first_study_id = import_study(str(source))
+                conn = sqlite3.connect(db.DB_PATH)
+                conn.execute(
+                    "UPDATE series SET role = 'unknown' WHERE study_id = ?",
+                    (first_study_id,),
+                )
+                conn.commit()
+                conn.close()
+
+                second_study_id = import_study(str(source))
+                conn = sqlite3.connect(db.DB_PATH)
+                role = conn.execute(
+                    "SELECT role FROM series WHERE study_id = ?", (second_study_id,)
+                ).fetchone()[0]
+                conn.close()
+                self.assertEqual(role, "cine_sax")
+
     def test_separate_enhanced_acquisitions_with_same_description_do_not_merge(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

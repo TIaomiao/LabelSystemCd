@@ -1121,7 +1121,11 @@ def _restore_study_state(conn, *, study_id: int, snapshot: dict[str, Any]) -> No
         restored_metadata = _series_metadata(row)
         restored_metadata.pop("tissue_lge_primary", None)
         if previous_series_state:
-            restored_role = previous_series_state.get("role") or restored_role
+            previous_role = previous_series_state.get("role")
+            # Preserve explicit prior labels, but do not let a historical
+            # automatic ``unknown`` erase a newly recognized cine/LGE role.
+            if previous_role and not (previous_role == "unknown" and restored_role != "unknown"):
+                restored_role = previous_role
             if (
                 restored_role == "lge_sax"
                 and previous_series_state.get("is_tissue_lge_primary") is True
